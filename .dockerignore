@@ -1,0 +1,17 @@
+.git
+.venv
+**/node_modules
+frontend/dist
+.env
+.env.*
+!.env.example
+backups
+logs
+__pycache__
+**/__pycache__
+.pytest_cache
+*.dump
+*.qbk
+*.csv
+*.xlsx
+.DS_Store

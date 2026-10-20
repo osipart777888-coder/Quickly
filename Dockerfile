@@ -1,13 +1,12 @@
 # multi-stage Dockerfile for quick, minimal production image
 
 # 1. build the React frontend
-FROM node:22-slim AS frontend-builder
+FROM node:24-bookworm-slim AS frontend-builder
 WORKDIR /app/frontend
 
-# copy only package.json (NOT lockfile) — npm ci + lockfile is broken
-# for multi-platform builds due to npm bug #4828 with optional deps
-COPY frontend/package.json ./
-RUN npm install
+# Lockfile contains optional native dependencies for macOS and Linux ARM64.
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-fund --audit=false
 
 # copy the rest of the frontend code and build
 COPY frontend/ .
@@ -15,7 +14,7 @@ RUN npm run build
 
 
 # 2. production Python image
-FROM python:3.12-slim AS backend
+FROM python:3.12-slim-bookworm AS backend
 WORKDIR /app
 
 # pg_dump / pg_restore for backup & restore (see app/backup_pg.py)
@@ -24,8 +23,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # install runtime dependencies
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements.lock ./
+RUN pip install --no-cache-dir --upgrade "pip>=26.2.1" \
+    && pip install --no-cache-dir -r requirements.lock
 
 # copy backend source code
 COPY app/ ./app/

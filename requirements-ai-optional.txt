@@ -1,0 +1,3 @@
+# Optional cloud AI SDKs; no API key or subscription is required for local operation.
+-r requirements.txt
+any-llm-sdk[all]>=1.9

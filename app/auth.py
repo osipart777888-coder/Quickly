@@ -19,7 +19,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import bcrypt
 import hashlib
 import hmac
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import PyJWTError as JWTError
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 

@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { FileUploadArea } from '../components/ui/FileUploadArea';
 
+import LocalLogin from '../components/LocalLogin';
+
 const BACKUP_MIN_PASSWORD_LEN = 8;
 
 function parseDetailMessage(text) {
@@ -106,6 +108,8 @@ export default function Login() {
             {heading}
           </h2>
         </div>
+
+        <LocalLogin firstUser={isFirstUser} />
 
         <div className="mt-8 space-y-4">
           <a

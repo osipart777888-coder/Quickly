@@ -366,3 +366,19 @@ async def make_queue_slot(
     session.add(slot)
     await session.flush()
     return slot
+
+
+@pytest.fixture(autouse=True)
+def deterministic_documentation_mail_hosts(monkeypatch):
+    """Documentation names must not depend on a local VPN's synthetic DNS IPs.
+
+    Real SSRF tests can still replace getaddrinfo within their own test.
+    No production DNS policy is changed.
+    """
+    import socket
+    original = socket.getaddrinfo
+    def resolve(host, port, *args, **kwargs):
+        if host in {"mail.example.com", "mail2.example.com", "smtp.example.com", "imap.example.com"}:
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port or 0))]
+        return original(host, port, *args, **kwargs)
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)

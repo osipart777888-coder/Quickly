@@ -1,0 +1,51 @@
+#!/bin/bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export QUICKLY_DATA_DIR="${QUICKLY_DATA_DIR:-$HOME/Library/Application Support/Quickly}"
+export PATH="/Applications/Docker.app/Contents/Resources/bin:$HOME/.docker/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+mkdir -p "$QUICKLY_DATA_DIR/backups" "$QUICKLY_DATA_DIR/logs"
+chmod 700 "$QUICKLY_DATA_DIR" "$QUICKLY_DATA_DIR/backups" "$QUICKLY_DATA_DIR/logs"
+compose() { docker compose -p quickly-mac -f "$ROOT/compose.macos.yml" "$@"; }
+ensure_docker() {
+  if ! docker info >/dev/null 2>&1; then
+    open -a Docker
+    for ((i=0;i<120;i++)); do
+      if docker info >/dev/null 2>&1; then return; fi
+      sleep 2
+    done
+    echo 'Docker не готов. Откройте Docker и завершите первоначальную настройку.' >&2
+    exit 1
+  fi
+}
+case "${1:-start}" in
+  start)
+    ensure_docker
+    compose up -d --wait --wait-timeout 180
+    for ((i=0;i<60;i++)); do
+      if curl -fsS http://localhost:8765/api/auth/setup-status >/dev/null; then exit 0; fi
+      sleep 2
+    done
+    echo 'Quickly не ответил. Проверьте журнал.' >&2; exit 1 ;;
+  open) "$0" start; open http://localhost:8765 ;;
+  stop) compose stop ;;
+  build) ensure_docker; compose build --pull app ;;
+  status) compose ps ;;
+  logs) compose logs --tail 100 app ;;
+  backup)
+    ensure_docker
+    umask 077
+    file="$QUICKLY_DATA_DIR/backups/quickly-$(date +%Y%m%d-%H%M%S).dump"
+    compose exec -T db pg_dump -U quickly -d quickly -Fc > "$file.tmp"
+    mv "$file.tmp" "$file"
+    echo "$file" ;;
+  verify-backup)
+    ensure_docker
+    file="${2:?Укажите путь к .dump}"
+    test_db="quickly_restore_check_$(date +%Y%m%d%H%M%S)_$$"
+    compose exec -T db createdb -U quickly "$test_db"
+    trap 'compose exec -T db dropdb -U quickly "$test_db"' EXIT
+    compose exec -T db pg_restore -U quickly -d "$test_db" --no-owner --no-privileges --exit-on-error < "$file"
+    compose exec -T db psql -U quickly -d "$test_db" -v ON_ERROR_STOP=1 -c 'SELECT count(*) AS administrators FROM app_user; SELECT count(*) AS inboxes FROM inbox; SELECT count(*) AS contacts FROM lead;'
+    echo 'Восстановление в отдельную проверочную базу прошло успешно.' ;;
+  *) echo 'Использование: quickly start|open|stop|build|status|logs|backup|verify-backup' >&2; exit 2 ;;
+esac

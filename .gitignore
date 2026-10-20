@@ -39,3 +39,10 @@ AGENTS.md
 tasks.md
 .omo/
 .commandcode/
+# Local execution and sensitive imports
+.pytest_cache/
+frontend/dist/
+*.dump
+*.qbk
+*.local.env
+local-data/

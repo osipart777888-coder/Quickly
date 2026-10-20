@@ -82,7 +82,11 @@ def encrypt(plaintext: str) -> str:
 
     Returns *plaintext* unchanged when encryption is not initialised.
     """
-    if _fernet is None or not plaintext:
+    if _fernet is None:
+        if os.getenv("QUICKLY_REQUIRE_EXTERNAL_KEYS", "").lower() == "true" and plaintext:
+            raise RuntimeError("Encryption key is required; refusing plaintext secret storage")
+        return plaintext
+    if not plaintext:
         return plaintext
     return _fernet.encrypt(plaintext.encode()).decode()
 

@@ -264,6 +264,10 @@ async def _ensure_secrets(db: AsyncSession) -> None:
     import os as _os
     import secrets as _secrets
 
+    if _os.getenv("QUICKLY_REQUIRE_EXTERNAL_KEYS", "").lower() == "true":
+        if not _os.getenv("QUICKLY_SECRET_KEY") or not _os.getenv("QUICKLY_ENCRYPTION_KEY"):
+            raise RuntimeError("External signing and encryption keys are required")
+
     # Fresh snapshot so we see anything written by initialize_settings above.
     data = await load_settings_from_db(db)
     changed = False
@@ -276,9 +280,11 @@ async def _ensure_secrets(db: AsyncSession) -> None:
 
     if env_secret:
         final_secret = env_secret
-        if not db_secret:
-            await save_setting_to_db(db, "quickly_secret_key", env_secret)
-            changed = True
+        # Externally managed keys must never be copied into a database dump.
+        from sqlalchemy import delete
+        from app.models import AppSetting
+        await db.execute(delete(AppSetting).where(AppSetting.key == "quickly_secret_key"))
+        changed = True
     elif db_secret:
         final_secret = db_secret
     else:
@@ -301,9 +307,10 @@ async def _ensure_secrets(db: AsyncSession) -> None:
 
     if env_enc:
         final_enc = env_enc
-        if not db_enc:
-            await save_setting_to_db(db, "quickly_encryption_key", env_enc)
-            changed = True
+        from sqlalchemy import delete
+        from app.models import AppSetting
+        await db.execute(delete(AppSetting).where(AppSetting.key == "quickly_encryption_key"))
+        changed = True
     elif db_enc:
         final_enc = db_enc
     else:

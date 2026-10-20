@@ -59,6 +59,16 @@ log = logging.getLogger("quickly.auth.routes")
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
+def _secure_auth_cookie() -> bool:
+    """HTTP cookies are allowed only for an explicitly configured local install."""
+    import os
+    from urllib.parse import urlparse
+    from app.settings_manager import settings
+    origin = urlparse(settings.base_url)
+    local_http = os.getenv("QUICKLY_LOCAL_HTTP", "").lower() == "true"
+    return not (local_http and origin.scheme == "http" and origin.hostname in {"localhost", "127.0.0.1", "::1"})
+
+
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
@@ -344,7 +354,7 @@ async def login(data: LoginRequest, response: Response, db: AsyncSession = Depen
         key="refresh_token",
         value=refresh_token,
         httponly=True,
-        secure=True,
+        secure=_secure_auth_cookie(),
         samesite="lax",
         max_age=7 * 24 * 60 * 60,  # 7 days
         path="/api/auth",
@@ -356,7 +366,7 @@ async def login(data: LoginRequest, response: Response, db: AsyncSession = Depen
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=True,
+        secure=_secure_auth_cookie(),
         samesite="lax",
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         path="/",
@@ -389,7 +399,7 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
         key="refresh_token",
         value=new_refresh,
         httponly=True,
-        secure=True,
+        secure=_secure_auth_cookie(),
         samesite="lax",
         max_age=7 * 24 * 60 * 60,
         path="/api/auth",
@@ -400,7 +410,7 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
         key="access_token",
         value=new_access,
         httponly=True,
-        secure=True,
+        secure=_secure_auth_cookie(),
         samesite="lax",
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         path="/",

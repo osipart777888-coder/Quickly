@@ -1,0 +1,6 @@
+# Optional native developer/bootstrap access. Never used by Quickly.app.
+# Listmonk uses 55432; this isolated instance uses loopback 55433.
+services:
+  db:
+    ports:
+      - '127.0.0.1:55433:5432'

@@ -1,0 +1,56 @@
+name: quickly-mac
+services:
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: quickly
+      POSTGRES_DB: quickly
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes:
+      - quickly_mac_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U quickly -d quickly']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [quickly]
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: quickly-mac:local
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:8765:8000'
+    env_file:
+      - '${QUICKLY_DATA_DIR:?Set QUICKLY_DATA_DIR}/secrets.env'
+    environment:
+      BASE_URL: http://localhost:8765
+      CORS_ORIGINS: http://localhost:8765,http://127.0.0.1:8765
+      QUICKLY_TELEMETRY: 'false'
+      QUICKLY_TELEMETRY_URL: ''
+      QUICKLY_LOCAL_DISK_BACKUPS: '1'
+      QUICKLY_MODE: production
+      QUICKLY_LOCAL_HTTP: 'true'
+      QUICKLY_REQUIRE_EXTERNAL_KEYS: 'true'
+      TEST_MODE: 'true'
+      TZ: Europe/Moscow
+    volumes:
+      - '${QUICKLY_DATA_DIR}/backups:/app/backups'
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [quickly]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+secrets:
+  postgres_password:
+    file: '${QUICKLY_DATA_DIR}/postgres-password'
+volumes:
+  quickly_mac_pgdata:
+    name: quickly_mac_pgdata
+networks:
+  quickly:
+    name: quickly_mac_network
