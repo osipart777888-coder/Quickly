@@ -167,6 +167,8 @@ async def guarded_send(db, inbox, *, operation_key=None, kind='manual', lead=Non
         operation.error = result.message[:2000]
         if result.error_type in {'auth_failed', 'permission_denied'}:
             inbox.paused = True
+        # Include this refusal in the persisted threshold calculation.
+        await db.flush()
         # Conservative account-level circuit breaker, with no sender rotation.
         recent = (await db.execute(select(MailOperation.status).where(
             MailOperation.inbox_id == inbox.id, MailOperation.created_at >= utcnow() - timedelta(hours=24),

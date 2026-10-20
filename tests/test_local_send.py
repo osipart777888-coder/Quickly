@@ -105,3 +105,17 @@ async def test_network_failure_is_uncertain_and_not_retried(session):
     assert operation.status == 'uncertain'
     assert not await guarded_send(session, inbox, operation_key='uncertain-one', kind='test',
                                    send=lambda **kwargs: SendResult('<duplicate>'), to_email='receiver@local.test')
+
+@pytest.mark.asyncio
+async def test_current_refusal_counts_toward_three_failure_pause(session):
+    from app.sender import SendFailure
+    inbox=await account(session)
+    calls=[]
+    def refused(**kwargs):
+        calls.append(1)
+        return SendFailure('smtp_rejected','Local test refusal')
+    for number in range(3):
+        assert not await guarded_send(session,inbox,kind='test',operation_key=f'refusal:{number}',send=refused,to_email='receiver@local.test')
+        assert inbox.paused is (number==2)
+    assert not await guarded_send(session,inbox,kind='test',send=refused,to_email='receiver@local.test')
+    assert len(calls)==3
