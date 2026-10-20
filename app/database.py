@@ -81,6 +81,15 @@ async def _run_migrations(conn) -> None:
         return
 
     pg_alters = [
+        "ALTER TABLE local_diagnostic_plan ADD COLUMN IF NOT EXISTS mode VARCHAR(16) NOT NULL DEFAULT 'pair'",
+        "ALTER TABLE local_diagnostic_plan ADD COLUMN IF NOT EXISTS per_account_daily_limit INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE local_diagnostic_plan ADD COLUMN IF NOT EXISTS auto_reply BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE local_diagnostic_plan ADD COLUMN IF NOT EXISTS rotation_offset INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE local_diagnostic_plan ADD COLUMN IF NOT EXISTS last_batch_id VARCHAR(32) NULL",
+        "ALTER TABLE local_diagnostic_run ADD COLUMN IF NOT EXISTS batch_id VARCHAR(32) NULL",
+        "ALTER TABLE local_diagnostic_run ADD COLUMN IF NOT EXISTS started_at TIMESTAMP WITHOUT TIME ZONE NULL",
+        "ALTER TABLE local_diagnostic_run ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMP WITHOUT TIME ZONE NULL",
+        "CREATE INDEX IF NOT EXISTS ix_local_diagnostic_run_batch_id ON local_diagnostic_run (batch_id)",
         "ALTER TABLE inbox ALTER COLUMN beacon_setup_token TYPE TEXT",
         "ALTER TABLE inbox ALTER COLUMN beacon_webhook_secret TYPE TEXT",
         "ALTER TABLE webhook ALTER COLUMN secret TYPE TEXT",

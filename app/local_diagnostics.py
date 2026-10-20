@@ -11,7 +11,7 @@ from datetime import timezone
 from sqlalchemy import func, select, update
 from app.app_settings import get_google_oauth_credentials, get_office365_oauth_credentials
 from app.database import AsyncSessionLocal
-from app.local_models import DiagnosticDayQuota, DiagnosticPlan, DiagnosticRun, MailOperation, SendControl
+from app.local_models import DiagnosticDayQuota, DiagnosticSenderDayQuota, DiagnosticPlan, DiagnosticRun, MailOperation, SendControl
 from app.local_send import day_bounds, guarded_send
 from app.models import GmailAccount, Inbox, Office365Account, SmtpAccount
 from app.sender import send_email, SendResult
@@ -39,57 +39,86 @@ async def send_arguments(db, inbox):
     return {'gmail_account': account, 'google_client_id': cid, 'google_client_secret': secret}
 
 
-async def plan_budget(db, plan):
+async def plan_budget(db, plan, sender_id=None):
     day, _, _ = day_bounds()
     if db.bind.dialect.name == 'postgresql':
         from sqlalchemy.dialects.postgresql import insert
     else:
         from sqlalchemy.dialects.sqlite import insert
-    await db.execute(insert(DiagnosticDayQuota).values(plan_id=plan.id, day=day, used=0).on_conflict_do_nothing(index_elements=['plan_id', 'day']))
-    used = await db.scalar(update(DiagnosticDayQuota).where(
-        DiagnosticDayQuota.plan_id == plan.id, DiagnosticDayQuota.day == day,
-        DiagnosticDayQuota.used < plan.max_messages_per_day,
-    ).values(used=DiagnosticDayQuota.used + 1).returning(DiagnosticDayQuota.used))
+    # Both counters commit together, before transport. A failed account budget
+    # does not consume the group counter, and concurrent workers serialize in SQL.
+    async with db.begin_nested():
+        await db.execute(insert(DiagnosticDayQuota).values(plan_id=plan.id, day=day, used=0)
+                         .on_conflict_do_nothing(index_elements=['plan_id', 'day']))
+        if plan.mode == 'group' and sender_id:
+            await db.execute(insert(DiagnosticSenderDayQuota).values(plan_id=plan.id,inbox_id=sender_id,day=day,used=0)
+                .on_conflict_do_nothing(index_elements=['plan_id','inbox_id','day']))
+            used = await db.scalar(update(DiagnosticSenderDayQuota).where(
+                DiagnosticSenderDayQuota.plan_id == plan.id,DiagnosticSenderDayQuota.inbox_id == sender_id,
+                DiagnosticSenderDayQuota.day == day,DiagnosticSenderDayQuota.used < plan.per_account_daily_limit)
+                .values(used=DiagnosticSenderDayQuota.used+1).returning(DiagnosticSenderDayQuota.used))
+            if used is None:
+                raise ValueError('Дневной предел исходных проверок этого ящика в группе исчерпан')
+        used = await db.scalar(update(DiagnosticDayQuota).where(
+            DiagnosticDayQuota.plan_id == plan.id, DiagnosticDayQuota.day == day,
+            DiagnosticDayQuota.used < plan.max_messages_per_day,
+        ).values(used=DiagnosticDayQuota.used + 1).returning(DiagnosticDayQuota.used))
+        if used is None:
+            raise ValueError('Дневной предел диагностических писем группы исчерпан')
     await db.commit()
-    if used is None:
-        raise ValueError('Дневной предел диагностических писем группы исчерпан')
 
 
 async def start_diagnostic(db, sender_id, recipient_id, plan=None):
     if sender_id == recipient_id:
         raise ValueError('Выберите два разных собственных ящика')
-    sender = await db.get(Inbox, sender_id)
-    recipient = await db.get(Inbox, recipient_id)
-    if not sender or not recipient:
+    if not await db.get(Inbox,sender_id) or not await db.get(Inbox,recipient_id):
         raise ValueError('Оба ящика должны быть подключены в Quickly')
-    if plan is not None:
-        await plan_budget(db, plan)
-    run = DiagnosticRun(id=uuid.uuid4().hex, sender_id=sender_id, recipient_id=recipient_id,
-                        plan_id=plan.id if plan else None, status='created')
+    run = DiagnosticRun(id=uuid.uuid4().hex,sender_id=sender_id,recipient_id=recipient_id,
+        plan_id=plan.id if plan else None,status='created')
     db.add(run)
     await db.commit()
+    return await execute_diagnostic(db,run,plan)
+
+
+async def execute_diagnostic(db, run, plan=None):
+    run.started_at = utcnow()
+    await db.commit()
     try:
-        args = await send_arguments(db, sender)
-        result = await guarded_send(db, sender, operation_key=f'diagnostic:{run.id}', kind='diagnostic', send=send_email,
-                                    to_email=recipient.email, from_email=sender.email, from_name=sender.display_name,
-                                    subject=f'[Quickly DIAGNOSTIC {run.id}] Проверка собственного ящика',
-                                    body=('Автоматическое диагностическое сообщение Quickly.\n'
-                                          'Отправлено между собственными ящиками владельца установки.\n'
-                                          'Это проверка транспорта, а не переписка с заинтересованным клиентом.\n'
-                                          f'Идентификатор проверки: {run.id}\n'),
-                                    provider=sender.provider, **args)
+        sender = await db.get(Inbox,run.sender_id,populate_existing=True)
+        recipient = await db.get(Inbox,run.recipient_id,populate_existing=True)
+        if not sender or not recipient or sender.paused or recipient.paused:
+            raise ValueError('Участник проверки удалён или приостановлен')
+        if plan is not None:
+            await db.refresh(plan)
+            if not plan.enabled:
+                raise ValueError('Расписание диагностики остановлено')
+            await plan_budget(db,plan,sender.id)
+        args = await send_arguments(db,sender)
+        result = await guarded_send(db,sender,operation_key=f'diagnostic:{run.id}',kind='diagnostic',
+            diagnostic_plan_id=plan.id if plan else None,send=send_email,
+            to_email=recipient.email,from_email=sender.email,from_name=sender.display_name,
+            subject=f'[Quickly DIAGNOSTIC {run.id}] Проверка собственного ящика',
+            body=('Автоматическое диагностическое сообщение Quickly.\n'
+                  'Отправлено между собственными ящиками владельца установки.\n'
+                  'Это проверка транспорта, а не переписка с заинтересованным клиентом.\n'
+                  f'Идентификатор проверки: {run.id}\n'),provider=sender.provider,**args)
         operation = await db.scalar(select(MailOperation).where(MailOperation.operation_key == f'diagnostic:{run.id}'))
         run.operation_id = operation.id if operation else None
-        if isinstance(result, SendResult):
+        if isinstance(result,SendResult):
             run.status = 'accepted'
             run.message_id = result.message_id or ''
-            run.report = {'smtp_accepted': True, 'received_confirmed': False,
-                          'note': 'Принято сервером отправителя. Получение пока не подтверждено.'}
+            run.report = {'smtp_accepted':True,'received_confirmed':False,
+                'note':'Принято сервером отправителя. Получение пока не подтверждено.'}
         else:
-            run.status = 'failed'
-            run.error = getattr(result, 'message', '') or 'Результат отправки неизвестен; автоматического повтора не будет'
+            run.status = 'uncertain' if operation and operation.status == 'uncertain' else 'skipped' if getattr(result,'error_type','') == 'local_block' else 'failed'
+            run.error = getattr(result,'message','') or 'Результат отправки неизвестен; автоматического повтора не будет'
+    except ValueError as exc:
+        run.status = 'skipped'
+        run.error = str(exc)[:2000]
     except Exception as exc:
-        run.status = 'failed'
+        operation = await db.scalar(select(MailOperation).where(MailOperation.operation_key == f'diagnostic:{run.id}'))
+        run.operation_id = operation.id if operation else None
+        run.status = 'uncertain' if operation else 'failed'
         run.error = sanitize_connection_error(str(exc)) or 'Не удалось выполнить диагностику'
     await db.commit()
     return run
@@ -211,6 +240,7 @@ async def find_received(db, inbox, run, *, reply=False):
 
 
 async def check_receipt(db, run, *, reply=False):
+    run.last_checked_at = utcnow()
     inbox = await db.get(Inbox, run.sender_id if reply else run.recipient_id)
     try:
         result = await find_received(db, inbox, run, reply=reply)
@@ -219,7 +249,10 @@ async def check_receipt(db, run, *, reply=False):
     report = dict(run.report or {})
     report['reply_check' if reply else 'receipt_check'] = result
     if result.get('found'):
-        run.status = 'reply_received' if reply else 'received'
+        if reply:
+            run.status = 'reply_received'
+        elif run.status not in {'reply_sent','reply_received'}:
+            run.status = 'received'
         if not reply:
             run.received_at = utcnow()
             run.duration_ms = max(0, int((run.received_at - run.created_at).total_seconds() * 1000))
@@ -232,11 +265,14 @@ async def check_receipt(db, run, *, reply=False):
     return run
 
 
-async def send_diagnostic_reply(db, run):
-    if run.status not in {'received', 'reply_received'}:
+async def send_diagnostic_reply(db, run, *, allow_claimed=False):
+    plan = None
+    if run.status not in ({'received','reply_received','reply_pending'} if allow_claimed else {'received','reply_received'}):
         raise ValueError('Сначала подтвердите получение исходного диагностического письма')
     if run.reply_message_id:
         raise ValueError('Диагностический ответ уже отправлен')
+    if await db.scalar(select(MailOperation.id).where(MailOperation.operation_key == f'diagnostic-reply:{run.id}')):
+        raise ValueError('Ответ уже выполнялся; автоматический повтор запрещён')
     if run.plan_id:
         plan = await db.get(DiagnosticPlan, run.plan_id)
         if not plan or not plan.enabled:
@@ -244,8 +280,10 @@ async def send_diagnostic_reply(db, run):
         await plan_budget(db, plan)
     sender = await db.get(Inbox, run.recipient_id)
     recipient = await db.get(Inbox, run.sender_id)
+    if not sender or not recipient or sender.paused or recipient.paused:
+        raise ValueError('Участник проверки удалён или приостановлен')
     args = await send_arguments(db, sender)
-    result = await guarded_send(db, sender, operation_key=f'diagnostic-reply:{run.id}', kind='diagnostic', send=send_email,
+    result = await guarded_send(db, sender, operation_key=f'diagnostic-reply:{run.id}', kind='diagnostic', diagnostic_plan_id=plan.id if plan else None, send=send_email,
         to_email=recipient.email, from_email=sender.email, from_name=sender.display_name,
         subject=f'[Quickly DIAGNOSTIC REPLY {run.id}] Подтверждение проверки',
         body=f'Автоматическое диагностическое подтверждение получения.\nНе является ответом клиента или заинтересованностью.\nПроверка: {run.id}',
@@ -253,34 +291,12 @@ async def send_diagnostic_reply(db, run):
     if not isinstance(result, SendResult):
         raise ValueError(getattr(result, 'message', '') or 'Результат ответа неизвестен; повтор заблокирован')
     run.reply_message_id = result.message_id
+    run.status = 'reply_sent'
     run.report = {**(run.report or {}), 'diagnostic_reply_accepted': True}
     await db.commit()
     return run
 
 
 async def run_diagnostic_job():
-    """DB-backed schedules; advance the due time atomically before doing any work."""
-    async with AsyncSessionLocal() as db:
-        control = await db.get(SendControl, 1)
-        if control and control.emergency_stopped:
-            return
-        plans = (await db.execute(select(DiagnosticPlan).where(DiagnosticPlan.enabled == True,
-                    DiagnosticPlan.next_run_at <= utcnow()).limit(20))).scalars().all()
-        for plan in plans:
-            local_now = utcnow().replace(tzinfo=timezone.utc).astimezone(ZoneInfo('Europe/Moscow'))
-            if local_now.weekday() not in plan.sending_days or not (plan.hours_start <= local_now.strftime('%H:%M') < plan.hours_end):
-                continue
-            now = utcnow()
-            claimed = await db.scalar(update(DiagnosticPlan).where(DiagnosticPlan.id == plan.id,
-                DiagnosticPlan.enabled == True, DiagnosticPlan.next_run_at <= now).values(
-                next_run_at=now + timedelta(minutes=plan.interval_minutes)).returning(DiagnosticPlan.id))
-            await db.commit()
-            if claimed:
-                try:
-                    await start_diagnostic(db, plan.sender_id, plan.recipient_id, plan)
-                except ValueError:
-                    pass  # A cap/stop is a normal outcome, never move it to another sender.
-        pending = (await db.execute(select(DiagnosticRun).where(DiagnosticRun.status == 'accepted',
-                    DiagnosticRun.created_at >= utcnow() - timedelta(hours=24)).limit(20))).scalars().all()
-        for run in pending:
-            await check_receipt(db, run)
+    from app.local_group_diagnostics import run_group_jobs
+    await run_group_jobs()

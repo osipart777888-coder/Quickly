@@ -48,6 +48,11 @@ class DiagnosticPlan(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False)
     inbox_ids = Column(JSON, nullable=False, default=list)
+    mode = Column(String(16), nullable=False, default='pair')
+    per_account_daily_limit = Column(Integer, nullable=False, default=1)
+    auto_reply = Column(Boolean, nullable=False, default=False)
+    rotation_offset = Column(Integer, nullable=False, default=0)
+    last_batch_id = Column(String(32), nullable=True)
     sender_id = Column(Integer, ForeignKey('inbox.id'), nullable=False)
     recipient_id = Column(Integer, ForeignKey('inbox.id'), nullable=False)
     enabled = Column(Boolean, nullable=False, default=False)
@@ -64,6 +69,9 @@ class DiagnosticRun(Base):
     __tablename__ = 'local_diagnostic_run'
     id = Column(String(32), primary_key=True, default=lambda: uuid.uuid4().hex)
     plan_id = Column(Integer, ForeignKey('local_diagnostic_plan.id'), nullable=True)
+    batch_id = Column(String(32), nullable=True, index=True)
+    started_at = Column(DateTime, nullable=True)
+    last_checked_at = Column(DateTime, nullable=True)
     sender_id = Column(Integer, ForeignKey('inbox.id'), nullable=False)
     recipient_id = Column(Integer, ForeignKey('inbox.id'), nullable=False)
     status = Column(String(32), nullable=False, default='created')
@@ -82,6 +90,14 @@ class DiagnosticRun(Base):
 class DiagnosticDayQuota(Base):
     __tablename__ = 'local_diagnostic_day_quota'
     plan_id = Column(Integer, ForeignKey('local_diagnostic_plan.id'), primary_key=True)
+    day = Column(String(10), primary_key=True)
+    used = Column(Integer, nullable=False, default=0)
+
+
+class DiagnosticSenderDayQuota(Base):
+    __tablename__ = 'local_diagnostic_sender_day_quota'
+    plan_id = Column(Integer, ForeignKey('local_diagnostic_plan.id'), primary_key=True)
+    inbox_id = Column(Integer, ForeignKey('inbox.id'), primary_key=True)
     day = Column(String(10), primary_key=True)
     used = Column(Integer, nullable=False, default=0)
 

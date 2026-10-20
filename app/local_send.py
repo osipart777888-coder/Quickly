@@ -133,9 +133,12 @@ async def reserve_operation(db, inbox, *, operation_key, recipient, kind, lead=N
     return operation, ''
 
 
-async def guarded_send(db, inbox, *, operation_key=None, kind='manual', lead=None, campaign_id=None, send, **kwargs):
+async def guarded_send(db, inbox, *, operation_key=None, kind='manual', lead=None, campaign_id=None, diagnostic_plan_id=None, send, **kwargs):
     if not local_install():
         return await asyncio.to_thread(send, **kwargs)
+    from app.local_models import DiagnosticPlan
+    if diagnostic_plan_id and not await db.scalar(select(DiagnosticPlan.enabled).where(DiagnosticPlan.id == diagnostic_plan_id)):
+        return SendFailure('local_block', 'Расписание диагностики остановлено')
     key = operation_key or f'{kind}:{uuid.uuid4().hex}'
     operation, error = await reserve_operation(db, inbox, operation_key=key, recipient=kwargs.get('to_email', ''),
                                              kind=kind, lead=lead, campaign_id=campaign_id)
@@ -143,7 +146,8 @@ async def guarded_send(db, inbox, *, operation_key=None, kind='manual', lead=Non
         return SendFailure('local_block', error)
     # A stop pressed after reservation still prevents a send that has not begun.
     control = await db.get(SendControl, 1, populate_existing=True)
-    if control and (control.emergency_stopped or (kind == 'campaign' and not control.campaigns_enabled)):
+    plan_stopped = diagnostic_plan_id and not await db.scalar(select(DiagnosticPlan.enabled).where(DiagnosticPlan.id == diagnostic_plan_id))
+    if plan_stopped or (control and (control.emergency_stopped or (kind == 'campaign' and not control.campaigns_enabled))):
         operation.status = 'cancelled'
         operation.error = 'Отправка остановлена до обращения к почтовому серверу'
         operation.finished_at = utcnow()

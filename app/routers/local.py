@@ -1,5 +1,6 @@
 """Local installation control, account overview and delivery ledger."""
 from datetime import timedelta
+from typing import Literal
 import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -148,11 +149,16 @@ class DiagnosticRequest(BaseModel):
 
 
 class PlanRequest(DiagnosticRequest):
+    mode: Literal['pair','group'] = 'pair'
+    sender_id: int | None = Field(default=None, ge=1)
+    recipient_id: int | None = Field(default=None, ge=1)
+    per_account_daily_limit: int = Field(default=1, ge=1, le=100)
+    auto_reply: bool = False
     name: str = Field(min_length=1, max_length=255)
-    inbox_ids: list[int] = Field(default_factory=list)
+    inbox_ids: list[int] = Field(default_factory=list, max_length=2000)
     enabled: bool = False
     interval_minutes: int = Field(default=1440, ge=15, le=43200)
-    max_messages_per_day: int = Field(default=1, ge=1, le=100)
+    max_messages_per_day: int = Field(default=1, ge=1, le=100000)
     sending_days: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4])
     hours_start: str = Field(default='09:00', pattern=r'^([01]\d|2[0-3]):[0-5]\d$')
     hours_end: str = Field(default='18:00', pattern=r'^([01]\d|2[0-3]):[0-5]\d$')
@@ -161,33 +167,89 @@ class PlanRequest(DiagnosticRequest):
 def run_json(run):
     return {key: getattr(run, key) for key in ['id', 'plan_id', 'sender_id', 'recipient_id', 'status',
         'message_id', 'reply_message_id', 'folder', 'authentication_headers', 'duration_ms', 'error',
-        'report', 'created_at', 'received_at']}
+        'report', 'created_at', 'received_at', 'batch_id', 'started_at']}
 
 
 @router.get('/diagnostics/plans')
 async def diagnostic_plans(db=Depends(get_db)):
-    from app.local_models import DiagnosticPlan
+    from app.local_models import DiagnosticPlan, DiagnosticDayQuota
     rows = (await db.execute(select(DiagnosticPlan).order_by(DiagnosticPlan.id.desc()))).scalars().all()
-    return [{key: getattr(row, key) for key in ['id', 'name', 'inbox_ids', 'sender_id', 'recipient_id',
-        'enabled', 'interval_minutes', 'max_messages_per_day', 'sending_days', 'hours_start', 'hours_end', 'next_run_at']} for row in rows]
+    counters = (await db.execute(select(DiagnosticRun.plan_id,DiagnosticRun.batch_id,DiagnosticRun.status,func.count())
+        .where(DiagnosticRun.plan_id.in_([p.id for p in rows]))
+        .group_by(DiagnosticRun.plan_id,DiagnosticRun.batch_id,DiagnosticRun.status))).all()
+    budgets = dict((await db.execute(select(DiagnosticDayQuota.plan_id,DiagnosticDayQuota.used)
+        .where(DiagnosticDayQuota.day == day_bounds()[0]))).all())
+    result = []
+    for row in rows:
+        item = {key:getattr(row,key) for key in ['id','name','inbox_ids','sender_id','recipient_id','mode',
+            'per_account_daily_limit','auto_reply','enabled','interval_minutes','max_messages_per_day',
+            'sending_days','hours_start','hours_end','next_run_at','last_batch_id']}
+        item['cycle_counts'] = {status:count for pid,batch,status,count in counters if pid == row.id and batch == row.last_batch_id}
+        item['used_today'] = budgets.get(row.id,0)
+        result.append(item)
+    return result
 
 
 @router.post('/diagnostics/plans')
 async def create_plan(data: PlanRequest, db=Depends(get_db), _admin=Depends(require_admin)):
     from app.local_models import DiagnosticPlan
+    from app.local_group_diagnostics import group_members
     if not data.owned_accounts_confirmed:
-        raise HTTPException(400, 'Подтвердите, что все выбранные ящики принадлежат вам')
-    ids = sorted(set(data.inbox_ids + [data.sender_id, data.recipient_id]))
+        raise HTTPException(400,'Подтвердите, что все выбранные ящики принадлежат вам')
+    if data.mode == 'pair' and (not data.sender_id or not data.recipient_id or data.sender_id == data.recipient_id):
+        raise HTTPException(400,'Выберите разные подключённые ящики')
+    ids = sorted(set(data.inbox_ids + ([data.sender_id,data.recipient_id] if data.mode == 'pair' else [])))
+    if len(ids) < 2 or any(i <= 0 for i in ids):
+        raise HTTPException(400,'Выберите минимум два собственных ящика')
     connected = set((await db.execute(select(Inbox.id).where(Inbox.id.in_(ids)))).scalars().all())
-    if connected != set(ids) or data.sender_id == data.recipient_id:
-        raise HTTPException(400, 'Выберите разные подключённые ящики из вашей группы')
+    if connected != set(ids):
+        raise HTTPException(400,'В группе есть неизвестный почтовый аккаунт')
+    if data.mode == 'group' and sum(item['eligible'] for item in await group_members(db,ids)) < 2:
+        raise HTTPException(400,'Нужны минимум два доступных ящика с настроенным чтением почты')
     if not data.sending_days or any(d not in range(7) for d in data.sending_days) or data.hours_start >= data.hours_end:
-        raise HTTPException(400, 'Укажите дни и корректный интервал часов')
-    plan = DiagnosticPlan(**data.model_dump(exclude={'owned_accounts_confirmed', 'inbox_ids'}),
-                          inbox_ids=ids, next_run_at=utcnow())
+        raise HTTPException(400,'Укажите дни и корректный интервал часов')
+    values = data.model_dump(exclude={'owned_accounts_confirmed','inbox_ids','sender_id','recipient_id'})
+    if data.mode == 'group':
+        values['enabled'] = False  # Separate explicit enable action starts the saved schedule.
+    plan = DiagnosticPlan(**values,inbox_ids=ids,sender_id=data.sender_id if data.mode == 'pair' else ids[0],
+        recipient_id=data.recipient_id if data.mode == 'pair' else ids[1],next_run_at=utcnow())
     db.add(plan)
     await db.flush()
-    return {'id': plan.id, 'ok': True}
+    return {'id':plan.id,'mode':plan.mode,'ok':True}
+
+
+class GroupPreview(BaseModel):
+    inbox_ids: list[int] = Field(min_length=2,max_length=2000)
+
+
+@router.post('/diagnostics/group-preview')
+async def group_preview(data: GroupPreview, db=Depends(get_db)):
+    from app.local_group_diagnostics import group_members,ring_pairs
+    members = await group_members(db,data.inbox_ids)
+    pairs = ring_pairs(members)
+    return {'selected':len(set(data.inbox_ids)),'eligible':sum(r['eligible'] for r in members),
+            'members':members,'pairs':pairs,'messages_per_cycle':len(pairs)}
+
+
+@router.post('/diagnostics/plans/{plan_id}/enqueue')
+async def enqueue_group(plan_id: int, db=Depends(get_db), _admin=Depends(require_admin)):
+    from app.local_group_diagnostics import enqueue_group_cycle
+    try:
+        return await enqueue_group_cycle(db,plan_id)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+@router.post('/diagnostics/plans/{plan_id}/cancel-queue')
+async def cancel_group_queue(plan_id: int, db=Depends(get_db), _admin=Depends(require_admin)):
+    from sqlalchemy import update
+    from app.local_models import DiagnosticPlan
+    if not await db.get(DiagnosticPlan,plan_id):
+        raise HTTPException(404,'Расписание не найдено')
+    result = await db.execute(update(DiagnosticRun).where(DiagnosticRun.plan_id == plan_id,DiagnosticRun.status == 'queued')
+        .values(status='cancelled',error='Ожидающая проверка отменена пользователем'))
+    await db.flush()
+    return {'cancelled':result.rowcount}
 
 
 class PlanToggle(BaseModel):
@@ -208,8 +270,14 @@ async def toggle_plan(plan_id: int, data: PlanToggle, db=Depends(get_db), _admin
 
 
 @router.get('/diagnostics/runs')
-async def diagnostic_runs(db=Depends(get_db)):
-    rows = (await db.execute(select(DiagnosticRun).order_by(DiagnosticRun.created_at.desc()).limit(200))).scalars().all()
+async def diagnostic_runs(plan_id: int | None = None, inbox_id: int | None = None, db=Depends(get_db)):
+    query = select(DiagnosticRun).order_by(DiagnosticRun.created_at.desc()).limit(200)
+    if plan_id:
+        query = query.where(DiagnosticRun.plan_id == plan_id)
+    if inbox_id:
+        from sqlalchemy import or_
+        query = query.where(or_(DiagnosticRun.sender_id == inbox_id,DiagnosticRun.recipient_id == inbox_id))
+    rows = (await db.execute(query)).scalars().all()
     return [run_json(row) for row in rows]
 
 
