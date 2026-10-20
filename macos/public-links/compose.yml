@@ -1,0 +1,22 @@
+# Optional. Configure DNS/HTTPS first; do not start as part of local installation.
+name: quickly-public-links
+services:
+  links:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ['80:80', '443:443']
+    environment:
+      QUICKLY_LINK_DOMAIN: '${QUICKLY_LINK_DOMAIN:?Set your public link domain}'
+      ACME_EMAIL: '${ACME_EMAIL:?Set certificate contact email}'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - certificates:/data
+      - configuration:/config
+    networks: [quickly]
+networks:
+  quickly:
+    external: true
+    name: quickly_mac_network
+volumes:
+  certificates:
+  configuration:

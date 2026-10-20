@@ -1,3 +1,4 @@
+import ContactTools from '../components/local/ContactTools';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
@@ -67,8 +68,9 @@ function leadRowSummary(lead) {
   return bits.slice(0, 3).join(' · ') + (bits.length > 3 ? '…' : '');
 }
 
-function buildLeadsQueryParams({ tab, debouncedSearch, statusFilter, interestFilter }) {
+function buildLeadsQueryParams({ tab, debouncedSearch, statusFilter, interestFilter, contactFilters = {} }) {
   const params = new URLSearchParams();
+  Object.entries(contactFilters).forEach(([key,value])=>{if(value)params.set(key,value);});
   if (debouncedSearch) params.set('q', debouncedSearch);
   if (tab === TAB_BOUNCED) {
     params.set('bad_only', 'true');
@@ -94,6 +96,7 @@ export default function Leads() {
   };
 
   const [leads, setLeads] = useState([]);
+  const [contactFilters, setContactFilters] = useState({});
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [interestFilter, setInterestFilter] = useState('all');
@@ -114,7 +117,7 @@ export default function Leads() {
   const loadLeads = useCallback(async () => {
     loading.start();
     try {
-      const params = buildLeadsQueryParams({ tab, debouncedSearch, statusFilter, interestFilter });
+      const params = buildLeadsQueryParams({ tab, debouncedSearch, statusFilter, interestFilter, contactFilters });
       const qs = params.toString();
       const data = await api.get('/leads' + (qs ? `?${qs}` : ''));
       const rows = Array.isArray(data) ? data : [];
@@ -132,7 +135,7 @@ export default function Leads() {
     } finally {
       loading.stop();
     }
-  }, [debouncedSearch, statusFilter, interestFilter, tab, loading, notify]);
+  }, [debouncedSearch, statusFilter, interestFilter, contactFilters, tab, loading, notify]);
 
   useEffect(() => {
     loadLeads();
@@ -271,7 +274,7 @@ export default function Leads() {
   };
 
   const exportCsv = async () => {
-    const params = buildLeadsQueryParams({ tab, debouncedSearch, statusFilter, interestFilter });
+    const params = buildLeadsQueryParams({ tab, debouncedSearch, statusFilter, interestFilter, contactFilters });
     const qs = params.toString();
     loading.start();
     try {
@@ -322,6 +325,7 @@ export default function Leads() {
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-8 space-y-6">
+      <ContactTools onChanged={loadLeads} onFilter={setContactFilters} selectedRows={leads.filter(l=>selected.has(l.id))} />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold mb-1">Leads</h1>
@@ -470,7 +474,7 @@ export default function Leads() {
 
       <Card className="overflow-x-auto max-w-full min-w-0">
         <div className="px-4 py-2 text-sm text-gray-500 border-b border-gray-100">
-          {leads.length} lead{leads.length !== 1 ? 's' : ''}
+          Contacts: {leads.length}
           {tab === TAB_BOUNCED ? ' (bounced or invalid)' : ''}
         </div>
         <table className="min-w-max w-full table-auto border-collapse text-sm">
@@ -486,7 +490,7 @@ export default function Leads() {
                 />
               </th>
               <th className="p-2">Email</th>
-              <th className="p-2">Name</th>
+              <th className="p-2">Name</th><th className="p-2">Company / city</th><th className="p-2">Segment</th><th className="p-2">Permission</th>
               <th className="p-2">Verify / enrollments</th>
               <th className="p-2">Campaigns</th>
               <th className="p-2">Sending inbox</th>
@@ -498,7 +502,7 @@ export default function Leads() {
           <tbody>
             {leads.length === 0 ? (
               <tr>
-                <td colSpan={tab === TAB_BOUNCED ? 9 : 7} className="p-8 text-center text-gray-500">
+                <td colSpan={tab === TAB_BOUNCED ? 12 : 10} className="p-8 text-center text-gray-500">
                   No leads match this view.
                 </td>
               </tr>
@@ -520,8 +524,10 @@ export default function Leads() {
                     </Link>
                   </td>
                   <td className="p-2 align-top">{l.name || '—'}</td>
+                  <td className="p-2 align-top">{l.custom_data?.company || '—'}<br/>{l.custom_data?.city || ''}</td><td className="p-2 align-top">{l.custom_data?.segment || '—'}</td><td className="p-2 align-top max-w-xs whitespace-normal text-xs">{l.custom_data?.consent_date || 'No date'}<br/>{l.custom_data?.consent_basis || 'No permission basis'}</td>
                   <td className="p-2 align-top">
                     <div className="flex flex-wrap gap-1">
+                      {l.status && l.status !== 'active' && <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-700">{l.status}</span>}
                       {l.email_verification_status && (
                         <span
                           className={cn(

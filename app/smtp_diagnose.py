@@ -913,7 +913,7 @@ def diagnose(
     return report
 
 
-def diagnose_account(account, to_email: str = "") -> dict[str, Any]:
+def diagnose_account(account, to_email: str = "", *, connection_only: bool = False) -> dict[str, Any]:
     """Run :func:`diagnose` against an ORM ``SmtpAccount``/inbox pair.
 
     Accepts anything exposing the ``smtp_*`` / ``imap_*`` attributes, so both
@@ -930,7 +930,7 @@ def diagnose_account(account, to_email: str = "") -> dict[str, Any]:
         username=username,
         password=getattr(account, "smtp_password", "") or "",
         from_email=username,
-        to_email=(to_email or username),
+        to_email="" if connection_only else (to_email or username),
         imap_host=getattr(account, "imap_host", "") or "",
         imap_port=getattr(account, "imap_port", 993) or 993,
         imap_username=getattr(account, "imap_username", "") or "",

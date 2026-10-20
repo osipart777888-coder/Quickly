@@ -19,6 +19,7 @@ from app.database import get_db
 from app.models import GmailAccount, GmailMessage, GmailSyncState, Inbox, Office365Account, Office365Message, SmtpAccount, SmtpMessage
 from app.app_settings import get_office365_oauth_credentials
 from app.sender import SendResult, send_email
+from app.local_send import guarded_send
 from app.time import utcnow
 from app.unibox import (
     BACKFILL_WINDOW_DAYS,
@@ -306,8 +307,8 @@ async def send_unibox_email(data: UniboxSendRequest, db: AsyncSession = Depends(
                 if reply_to and not references:
                     references = reply_to
 
-    send_result = await asyncio.to_thread(
-        send_email,
+    send_result = await guarded_send(
+        db, inbox, kind="reply", send=send_email,
         to_email=data.to_email,
         subject=data.subject,
         body=data.body,

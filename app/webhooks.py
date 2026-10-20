@@ -88,6 +88,9 @@ async def _post_webhook(wh: Webhook, event_type: str, data: dict[str, Any]) -> b
 async def fire_webhook_event(
     db: AsyncSession, event_type: str, data: dict[str, Any]
 ) -> None:
+    if event_type == 'email.bounced':
+        from app.local_safety import record_feedback
+        await record_feedback(db, data.get('inbox_id'), 'bounce', data.get('lead_email', data.get('lead_id', '')))
     """Fire *event_type* with *data* to all active webhooks subscribed to it.
 
     Each webhook that has *event_type* in its ``events`` list (or has an
@@ -126,6 +129,9 @@ async def fire_webhook_event(
 async def maybe_fire_email_event(
     db: AsyncSession, event_type: str, data: dict[str, Any]
 ) -> None:
+    if event_type == 'email.bounced':
+        from app.local_safety import record_feedback
+        await record_feedback(db, data.get('inbox_id'), 'bounce', data.get('lead_email', data.get('lead_id', '')))
     """Backward-compatible alias — routes through the new webhook system."""
     await fire_webhook_event(db, event_type, data)
 

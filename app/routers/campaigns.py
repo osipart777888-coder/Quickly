@@ -198,7 +198,7 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)):
             )
             .where(
                 LeadReply.campaign_id.in_(campaign_ids),
-                CampaignLead.interest_status.notin_(["out_of_office", "auto_reply"]),
+                (CampaignLead.interest_status.is_(None) | CampaignLead.interest_status.notin_(["out_of_office", "auto_reply"])),
             )
             .group_by(LeadReply.campaign_id)
         )
@@ -408,7 +408,7 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
         )
         .where(
             LeadReply.campaign_id == campaign_id,
-            CampaignLead.interest_status.notin_(["out_of_office", "auto_reply"]),
+            (CampaignLead.interest_status.is_(None) | CampaignLead.interest_status.notin_(["out_of_office", "auto_reply"])),
         )
     )
     stats["replies"] = res.scalar() or 0
@@ -1733,9 +1733,10 @@ async def send_test_email(
 
     from app.sender import send_email
 
-    result = await asyncio.get_event_loop().run_in_executor(
-        None,
-        lambda: send_email(
+    from app.local_send import guarded_send
+
+    result = await guarded_send(
+        db, inbox, kind="test", send=send_email,
             to_email=data.to_email,
             subject=f"[TEST] {rendered_subject}",
             body=rendered_body,
@@ -1746,7 +1747,6 @@ async def send_test_email(
             gmail_account=gmail_account,
             office365_account=office365_account,
             smtp_account=smtp_account,
-        ),
     )
 
     if not result:

@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import localize from './scripts/localize.cjs';
 
 const allowedHostsExtra = (process.env.VITE_ALLOWED_HOSTS || '')
   .split(',')
@@ -7,7 +8,7 @@ const allowedHostsExtra = (process.env.VITE_ALLOWED_HOSTS || '')
   .filter(Boolean);
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react({ babel: { plugins: [localize] } })],
   server: {
     // Public dev hostname (e.g. behind host Caddy → docker-compose-not-host.dev.yml).
     // Add more via VITE_ALLOWED_HOSTS in .env_dev (comma-separated).

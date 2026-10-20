@@ -101,7 +101,9 @@ def decrypt(ciphertext: str) -> str:
         return ciphertext
     try:
         return _fernet.decrypt(ciphertext.encode()).decode()
-    except (InvalidToken, Exception):
+    except Exception as exc:
+        if ciphertext.startswith("gAAAAA") and os.getenv("QUICKLY_REQUIRE_EXTERNAL_KEYS", "").lower() == "true":
+            raise RuntimeError("Ключ шифрования не подходит к сохранённым данным; запись остановлена") from exc
         return ciphertext
 
 
@@ -135,6 +137,19 @@ class EncryptedText(TypeDecorator):
         if value is None:
             return value
         return decrypt(value)
+
+
+class LocalSettingsText(EncryptedText):
+    """Encrypt all local settings, including AI keys, backup passwords and webhook tokens.
+
+    Legacy installs without external keys retain their existing bootstrap format.
+    """
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if os.getenv("QUICKLY_REQUIRE_EXTERNAL_KEYS", "").lower() == "true":
+            return super().process_bind_param(value, dialect)
+        return value
 
 
 # ---------------------------------------------------------------------------

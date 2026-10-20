@@ -100,6 +100,7 @@ def _lead_to_response(
         )
     return LeadResponse(
         id=lead.id,
+        status=lead.status or "active",
         email=lead.email,
         name=lead.name or "",
         custom_data=lead.custom_data if isinstance(lead.custom_data, dict) else {},
@@ -514,6 +515,9 @@ async def _finalize_lead_recovery(
 
 @router.get("", response_model=list[LeadResponse])
 async def list_leads(
+    segment: str | None = Query(None),
+    city: str | None = Query(None),
+    okved: str | None = Query(None),
     status: str | None = Query(None),
     bad_only: bool = Query(
         False,
@@ -528,6 +532,9 @@ async def list_leads(
 ):
     intr = _optional_interest_for_stmt(interest)
     stmt = _build_leads_stmt(q=q, status=status, bad_only=bad_only, interest=intr)
+    for key, value in [('segment', segment), ('city', city), ('okved', okved)]:
+        if isinstance(value, str) and value.strip():
+            stmt = stmt.where(Lead.custom_data[key].as_string() == value.strip())
     result = await db.execute(stmt)
     leads = result.scalars().all()
     ids = [x.id for x in leads]
@@ -550,6 +557,9 @@ async def list_leads(
 
 @router.get("/export")
 async def export_leads_csv(
+    segment: str | None = Query(None),
+    city: str | None = Query(None),
+    okved: str | None = Query(None),
     status: str | None = Query(None),
     bad_only: bool = Query(False),
     interest: str | None = Query(
@@ -562,6 +572,9 @@ async def export_leads_csv(
     """CSV export aligned with the Leads UI: core columns plus all custom_data keys."""
     intr = _optional_interest_for_stmt(interest)
     stmt = _build_leads_stmt(q=q, status=status, bad_only=bad_only, interest=intr)
+    for key, value in [('segment', segment), ('city', city), ('okved', okved)]:
+        if isinstance(value, str) and value.strip():
+            stmt = stmt.where(Lead.custom_data[key].as_string() == value.strip())
     result = await db.execute(stmt)
     leads = list(result.scalars().all())
     ids = [x.id for x in leads]

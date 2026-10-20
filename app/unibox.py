@@ -687,7 +687,8 @@ async def _classify_and_notify_bg(
         from app.webhooks import fire_webhook_event
 
         async with AsyncSessionLocal() as session:
-            if not await is_ai_enabled(session):
+            from app.local_send import local_install
+            if not local_install() and not await is_ai_enabled(session):
                 return
 
             # Fetch full thread messages for richer AI context
@@ -763,6 +764,12 @@ async def _classify_and_notify_bg(
                 return  # classifier failed — normal webhook already sent
 
             from app.models import CampaignLead as _CL
+            if classification == "unsubscribed" and local_install():
+                from app.local_models import Suppression
+                norm = lead_email.strip().lower()
+                if await session.get(Suppression, norm) is None:
+                    session.add(Suppression(email=norm, reason="Просьба не писать, обнаруженная в ответе"))
+                await session.execute(Lead.__table__.update().where(func.lower(Lead.email) == norm).values(status="unsubscribed"))
 
             for camp_id in campaign_ids:
                 cl_res = await session.execute(
@@ -868,6 +875,9 @@ async def _upsert_message_from_gmail(
     labels = gmail_message.get("labelIds", []) or []
     payload = gmail_message.get("payload", {}) or {}
     headers = payload.get("headers", []) or []
+    from app.local_safety import gmail_abuse, record_feedback
+    if gmail_abuse(payload):
+        await record_feedback(db, inbox_id, 'complaint', gmail_msg_id)
     headers_json = json.dumps(headers)
     label_ids_json = json.dumps(labels)
     body_plain = ""
@@ -1655,6 +1665,9 @@ async def _process_smtp_inbound_message(
     db.add(row)
     await db.flush()
 
+    if parsed.get('feedback_abuse'):
+        from app.local_safety import record_feedback
+        await record_feedback(db, inbox.id, 'complaint', parsed.get('message_id', message_pk))
     from_addr = (parsed.get("from") or "").lower()
     subject_hdr = parsed.get("subject", "") or ""
 
@@ -2105,7 +2118,7 @@ async def list_unibox_conversations(
     if leads_only:
         gmail_stmt = gmail_stmt.where(GmailThread.is_lead_thread.is_(True))
     if lead_status:
-        gmail_stmt = gmail_stmt.where(_unibox_lead_status_filter_criterion(lead_sq, lead_status))
+        gmail_stmt = gmail_stmt.where(GmailThread.unread_lead_reply.is_(True) if lead_status == 'unread' else _unibox_lead_status_filter_criterion(lead_sq, lead_status))
 
     gmail_rows = (await db.execute(gmail_stmt)).all()
 
@@ -2158,7 +2171,7 @@ async def list_unibox_conversations(
     if leads_only:
         o365_stmt = o365_stmt.where(Office365Thread.is_lead_thread.is_(True))
     if lead_status:
-        o365_stmt = o365_stmt.where(_unibox_lead_status_filter_criterion(lead_sq, lead_status))
+        o365_stmt = o365_stmt.where(Office365Thread.unread_lead_reply.is_(True) if lead_status == 'unread' else _unibox_lead_status_filter_criterion(lead_sq, lead_status))
 
     o365_rows = (await db.execute(o365_stmt)).all()
 
@@ -2211,7 +2224,7 @@ async def list_unibox_conversations(
     if leads_only:
         smtp_stmt = smtp_stmt.where(SmtpThread.is_lead_thread.is_(True))
     if lead_status:
-        smtp_stmt = smtp_stmt.where(_unibox_lead_status_filter_criterion(lead_sq, lead_status))
+        smtp_stmt = smtp_stmt.where(SmtpThread.unread_lead_reply.is_(True) if lead_status == 'unread' else _unibox_lead_status_filter_criterion(lead_sq, lead_status))
 
     smtp_rows = (await db.execute(smtp_stmt)).all()
 
@@ -3819,6 +3832,10 @@ async def _detect_o365_lead_replies(
     inbox_email = inbox.email.lower()
 
     for msg in messages:
+        feedback_headers = {h.get('name', '').lower(): h.get('value', '') for h in msg.get('internetMessageHeaders', [])}
+        if feedback_headers.get('feedback-type', '').lower() == 'abuse':
+            from app.local_safety import record_feedback
+            await record_feedback(db, inbox.id, 'complaint', msg.get('id', ''))
         from_data = msg.get("from", {}) or {}
         from_ea = from_data.get("emailAddress", {}) or {}
         from_addr = str(from_ea.get("address", "")).lower()
@@ -3948,6 +3965,10 @@ async def _detect_o365_lead_replies(
     # After processing normal lead replies, iterate again over the same batch
     # looking for mailer-daemon / postmaster bounce notifications.
     for msg in messages:
+        feedback_headers = {h.get('name', '').lower(): h.get('value', '') for h in msg.get('internetMessageHeaders', [])}
+        if feedback_headers.get('feedback-type', '').lower() == 'abuse':
+            from app.local_safety import record_feedback
+            await record_feedback(db, inbox.id, 'complaint', msg.get('id', ''))
         from_data = msg.get("from", {}) or {}
         from_ea = from_data.get("emailAddress", {}) or {}
         from_addr_ndr = str(from_ea.get("address", "")).lower()

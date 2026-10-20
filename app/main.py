@@ -49,6 +49,7 @@ from app.routers import notifications as notifications_router
 from app.routers import notices as notices_router
 from app.routers import system_health as system_health_router
 from app.routers import analytics as analytics_router
+from app.routers import local as local_router
 from app.jobs import run_send_job, run_slot_scan_job, last_send_job_run, last_send_job_sent_count, run_telemetry_heartbeat_job
 from app.unibox import queue_sync_for_all_inboxes, run_unibox_sync_job
 from app import time as time_provider
@@ -58,6 +59,14 @@ import app.scheduler as scheduler_mod
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    from app.local_send import local_install
+    if local_install():
+        from app.database import AsyncSessionLocal as _sessions
+        from app.app_settings import set_test_mode, set_telemetry_enabled
+        async with _sessions() as db:
+            await set_test_mode(db, False)
+            await set_telemetry_enabled(db, False)
+            await db.commit()
 
     unibox_interval_minutes = 5
 
@@ -98,6 +107,10 @@ async def lifespan(app: FastAPI):
             id="office365_graph_subscription_renewal",
             replace_existing=True,
         )
+        if local_install():
+            from app.local_diagnostics import run_diagnostic_job
+            schedule.add_job(run_diagnostic_job, "interval", minutes=1,
+                             id="local_diagnostics", replace_existing=True, max_instances=1)
         # Anonymous usage heartbeat (app/telemetry.py). Disabled by the Settings
         # toggle or QUICKLY_TELEMETRY=false; enabled by default; fails open when the hub is
         # unreachable. Fires once shortly after boot, then every 12 hours.
@@ -266,6 +279,7 @@ app.include_router(notifications_router.router, dependencies=_auth_deps)
 app.include_router(notices_router.router, dependencies=_auth_deps)
 app.include_router(system_health_router.router, dependencies=_auth_deps)
 app.include_router(analytics_router.router, dependencies=_auth_deps)
+app.include_router(local_router.router, dependencies=_auth_deps)
 
 # lightweight public utility for MX-based provider detection
 app.include_router(email_provider_router.router)

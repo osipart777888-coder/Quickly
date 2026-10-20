@@ -293,6 +293,15 @@ async def _send_notification_for_user(
     event loop.  The helpers mutate the ``User`` model — that is fine, the
     subsequent ``await db.flush()`` still runs on the async connection.
     """
+    from app.local_send import local_install, guarded_send, campaign_sending_allowed
+    local_inbox = None
+    if local_install():
+        from app.models import Inbox
+        if not await campaign_sending_allowed(db):
+            return False
+        local_inbox = await db.scalar(select(Inbox).where(Inbox.email == user.email))
+        if local_inbox is None:
+            return False  # Every outgoing sender must have a configured daily budget.
     to = config.notification_email or user.email
 
     # Refresh token if near expiry
@@ -309,6 +318,14 @@ async def _send_notification_for_user(
         log.warning("User %s has no notification access token — skipping", user.id)
         return False
 
+    if local_inbox is not None:
+        def deliver(**_context):
+            if user.oauth_provider == "google":
+                return _send_via_gmail(user, to, subject, body)
+            if user.oauth_provider == "microsoft":
+                return _send_via_microsoft(user, to, subject, body)
+            return False
+        return bool(await guarded_send(db, local_inbox, kind="notification", send=deliver, to_email=to))
     if user.oauth_provider == "google":
         return await asyncio.to_thread(_send_via_gmail, user, to, subject, body)
     elif user.oauth_provider == "microsoft":

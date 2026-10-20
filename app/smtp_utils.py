@@ -83,6 +83,19 @@ def _assert_host_not_private(host: str) -> str | None:
     ok, reason = resolve_and_check(host)
     if ok:
         return None
+    # Some local VPNs expose synthetic DNS addresses. Only explicitly trusted
+    # hostnames may use these two proxy ranges; RFC1918/loopback/metadata stay blocked.
+    try:
+        from app.local_send import local_install
+        import ipaddress
+        trusted = getattr(settings, "smtp_trusted_proxy_hosts", set())
+        if local_install() and host in trusted:
+            addresses = {r[4][0] for r in socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)}
+            proxy_ranges = (ipaddress.ip_network("198.18.0.0/15"), ipaddress.ip_network("240.0.0.0/4"))
+            if addresses and all(not is_private_ip(ip) or any(ipaddress.ip_address(ip) in n for n in proxy_ranges) for ip in addresses):
+                return None
+    except (OSError, ValueError):
+        pass
     # Only reject when the failure is an actual private/blocked resolution;
     # a DNS lookup failure is left to the connection test to report.
     reason_low = reason.lower()
@@ -271,6 +284,10 @@ def validate_smtp_account_payload(data: dict, require_password: bool = True) -> 
             return "imap_port must be a number"
         if not 1 <= imap_port <= 65535:
             return "imap_port must be between 1 and 65535"
+        import os
+        from app.local_send import local_install
+        if local_install() and not data.get('imap_use_ssl', True) and os.getenv('SMTP_ALLOW_PLAIN_SMTP', '').lower() not in ('true', '1', 'yes'):
+            return 'Для локальной рабочей установки требуется IMAP с SSL/TLS (обычно порт 993)'
         # When IMAP is configured, its auth must be complete as well.
         if not (data.get("imap_username") or "").strip():
             return "imap_username is required when imap_host is set"
@@ -444,6 +461,7 @@ def parse_imap_message(raw: bytes) -> dict:
     snippet = " ".join(snippet.split())[:180]
 
     return {
+        "feedback_abuse": any(part.get_content_type() == 'message/feedback-report' and any(str(x.get('Feedback-Type', '')).lower() == 'abuse' for x in (part.get_payload() if isinstance(part.get_payload(), list) else [])) for part in msg.walk()),
         "subject": subject,
         "message_id": message_id,
         "in_reply_to": in_reply_to,

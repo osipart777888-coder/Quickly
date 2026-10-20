@@ -1,3 +1,5 @@
+@import "tailwindcss";
+@config "../tailwind.config.js";
 @font-face {
   font-family: 'Figtree';
   font-weight: 100 900;
@@ -12,9 +14,10 @@
   src: url('./assets/fonts/Figtree-Italic-VariableFont_wght.woff2') format('woff2');
 }
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+
+@layer base {
+  *, ::before, ::after { border-color: var(--color-gray-200, currentColor); }
+}
 
 /* apply as default */
 body {
@@ -187,3 +190,6 @@ html, body, #root {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+html[lang="ru"] .ql-snow .ql-picker.ql-header .ql-picker-label::before,
+html[lang="ru"] .ql-snow .ql-picker.ql-header .ql-picker-item::before { content: attr(data-label) !important; }

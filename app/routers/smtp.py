@@ -20,6 +20,7 @@ from app.smtp_utils import (
     validate_smtp_account_payload,
 )
 from app.time import utcnow
+from app.local_send import guarded_send, local_install
 
 log = logging.getLogger("quickly.smtp_router")
 
@@ -283,7 +284,7 @@ async def diagnose_unsaved(
             username=data.smtp_username or "",
             password=data.smtp_password or "",
             from_email=data.smtp_username or "",
-            to_email=data.smtp_username or "",
+            to_email="" if local_install() else (data.smtp_username or ""),
             imap_host=data.imap_host or "",
             imap_port=int(data.imap_port or 993),
             imap_username=data.imap_username or "",
@@ -339,7 +340,7 @@ async def diagnose_smtp_account(
     # Run the blocking probe off the event loop; it has its own per-stage (~8s)
     # and overall (~30s) timeouts so the request worker cannot hang.
     report = await asyncio.wait_for(
-        asyncio.to_thread(diagnose_account, acct), timeout=45.0
+        asyncio.to_thread(diagnose_account, acct, **({"connection_only": True} if local_install() else {})), timeout=45.0
     )
 
     acct.last_diagnostic_at = utcnow()
@@ -411,7 +412,7 @@ async def send_test_email(
 
     from app.sender import SendFailure, SendResult, _send_via_smtp
 
-    def _do_send():
+    def _do_send(**_context):
         return _send_via_smtp(
             to_email=to_email,
             subject="Quickly test email",
@@ -425,7 +426,7 @@ async def send_test_email(
         )
 
     try:
-        result_obj = await asyncio.wait_for(asyncio.to_thread(_do_send), timeout=60.0)
+        result_obj = await asyncio.wait_for(guarded_send(db, inbox, kind="test", send=_do_send, to_email=to_email), timeout=60.0)
     except asyncio.TimeoutError:
         acct.last_send_error = "Test send timed out"
         acct.last_send_at = utcnow()
@@ -500,6 +501,13 @@ async def test_smtp_account(
     err_parts = [p for p in (smtp_res.error, imap_res.error) if p]
     acct.last_tested_at = utcnow()
     acct.last_test_ok = ok
+    if local_install():
+        import json
+        from app.settings_manager import save_setting_to_db
+        await save_setting_to_db(db, f"local_connection_health_{inbox_id}", json.dumps({
+            "smtp": "ok" if smtp_res.ok else "error",
+            "imap": ("ok" if imap_res.ok else "error") if acct.imap_host else "not_configured",
+        }))
     # Persist a sanitised category message — raw exception text can leak
     # internal hostnames/ports and act as a network-probing oracle. Full
     # detail goes to the application log only.

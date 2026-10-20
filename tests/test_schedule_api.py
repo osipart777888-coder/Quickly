@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 
-def test_schedule_api_basic_endpoints():
+def test_schedule_api_basic_endpoints(authenticated_api):
     # No manual initialization required; the shared engine fixture
     # ensures the schema is in place and is wired into the FastAPI app.
     """Verify that the schedule-related APIs exist and return the expected
@@ -52,7 +52,7 @@ def test_schedule_api_basic_endpoints():
 
 
 @pytest.mark.asyncio
-async def test_schedule_sent_includes_opens_clicks(session):
+async def test_schedule_sent_includes_opens_clicks(session, authenticated_api):
     """When logs have associated opens/clicks we should return them without
     triggering lazy-loading errors.
 
@@ -88,3 +88,17 @@ async def test_schedule_sent_includes_opens_clicks(session):
         entry = data[0]
         assert entry["opens"][0]["ip"] == "1.2.3.4"
         assert entry["clicks"][0]["ip"] == "5.6.7.8"
+
+
+@pytest.fixture
+def authenticated_api():
+    from types import SimpleNamespace
+    from app.main import app
+    from app.auth import get_current_user
+    async def admin():
+        return SimpleNamespace(id=1, role="admin", is_active=True)
+    app.dependency_overrides[get_current_user] = admin
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)

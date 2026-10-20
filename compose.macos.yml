@@ -30,12 +30,15 @@ services:
       BASE_URL: http://localhost:8765
       CORS_ORIGINS: http://localhost:8765,http://127.0.0.1:8765
       QUICKLY_TELEMETRY: 'false'
-      QUICKLY_TELEMETRY_URL: ''
+      QUICKLY_TELEMETRY_URL: 'http://127.0.0.1:9'
       QUICKLY_LOCAL_DISK_BACKUPS: '1'
       QUICKLY_MODE: production
       QUICKLY_LOCAL_HTTP: 'true'
       QUICKLY_REQUIRE_EXTERNAL_KEYS: 'true'
-      TEST_MODE: 'true'
+      TEST_MODE: 'false'
+      QUICKLY_LOCAL_INSTALL: 'true'
+      QUICKLY_QUOTA_TIMEZONE: Europe/Moscow
+      SMTP_TRUSTED_PROXY_HOSTS: smtp.yandex.ru,imap.yandex.ru,smtp.mail.ru,imap.mail.ru
       TZ: Europe/Moscow
     volumes:
       - '${QUICKLY_DATA_DIR}/backups:/app/backups'
@@ -43,6 +46,12 @@ services:
       db:
         condition: service_healthy
     networks: [quickly]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/auth/setup-status', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
 secrets:

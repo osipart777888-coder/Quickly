@@ -72,7 +72,7 @@ def _disable_mcp_lifespan_repeat_app_starts(monkeypatch):
 
 
 @pytest_asyncio.fixture
-async def engine():
+async def engine(monkeypatch):
     """Create a database engine for tests.
 
     If ``TEST_DATABASE_URL`` is defined, use it.  Otherwise fall back to an
@@ -143,6 +143,13 @@ async def engine():
     _adb.AsyncSessionLocal = async_sessionmaker(
         eng, class_=AsyncSession, expire_on_commit=False, autocommit=False, autoflush=False
     )
+
+    # Every app component must use this isolated test DB, including modules
+    # imported during an earlier TestClient lifespan (backup scheduler, etc.).
+    import sys
+    for name, module in list(sys.modules.items()):
+        if name.startswith("app.") and name != "app.database" and isinstance(getattr(module, "AsyncSessionLocal", None), async_sessionmaker):
+            monkeypatch.setattr(module, "AsyncSessionLocal", _adb.AsyncSessionLocal)
 
     yield eng
 

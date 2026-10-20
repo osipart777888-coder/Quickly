@@ -1,5 +1,6 @@
 import React from 'react';
 import Sidebar from './ui/Sidebar';
+import ControlBar from './local/ControlBar';
 import TestModeBanner from './TestModeBanner';
 import AppNotices from './AppNotices';
 import Onboarding from './Onboarding';
@@ -12,7 +13,7 @@ import { OnboardingProvider } from '../context/OnboardingContext';
 
 function LayoutInner({ children, sidebarCollapsed, setSidebarCollapsed }) {
   const { isProduction } = useAppMode();
-  const contentMargin = sidebarCollapsed ? 'ml-16' : 'ml-44';
+  const contentMargin = sidebarCollapsed ? 'ml-16' : 'ml-64';
 
   return (
     <div className="flex h-[100dvh] min-h-0 w-full overflow-hidden">
@@ -32,6 +33,7 @@ function LayoutInner({ children, sidebarCollapsed, setSidebarCollapsed }) {
         className={`${contentMargin} flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gray-50 text-gray-900`}
       >
         {!isProduction && <TestModeBanner />}
+        <ControlBar />
         <AppNotices />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           {children}
@@ -46,7 +48,7 @@ export default function Layout({ children }) {
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(() => {
     try {
       const stored = localStorage.getItem('sidebarCollapsed');
-      return stored === 'true';
+      return window.innerWidth < 900 || stored === 'true';
     } catch {
       return false;
     }

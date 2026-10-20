@@ -148,6 +148,7 @@ export default function Unibox() {
 
   const LEAD_STATUSES = [
     { value: '', label: 'All statuses' },
+    { value: 'unread', label: 'New replies' },
     { value: 'active', label: 'Active' },
     { value: 'contacted', label: 'Contacted' },
     { value: 'completed', label: 'Completed' },

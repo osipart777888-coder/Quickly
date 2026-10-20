@@ -44,6 +44,7 @@ from app.webhooks import fire_webhook_event
 from app.app_settings import get_google_oauth_credentials, get_office365_oauth_credentials
 from app import time as time_provider
 from app.queue_logic import _parse_time, compute_effective_daily_limit
+from app.local_send import guarded_send, campaign_sending_allowed
 from app.campaign_lead_status import campaign_lead_may_receive_sends
 
 log = logging.getLogger(__name__)
@@ -193,6 +194,8 @@ async def run_send_job():
     log.info("Send job running at %s (local)", now.isoformat())
 
     async with AsyncSessionLocal() as session:
+        if not await campaign_sending_allowed(session):
+            return
         today = now.date()
 
         result = await session.execute(select(Inbox).where(Inbox.paused == False))  # noqa: E712
@@ -858,8 +861,9 @@ async def run_send_job():
                     # relay cannot stall the event loop (and every HTTP request
                     # served by it).
                     try:
-                        result = await asyncio.to_thread(
-                            send_email,
+                        result = await guarded_send(
+                            session, inbox, operation_key=f"campaign:{cl.id}:{slot.sequence_index}",
+                            kind="campaign", lead=lead, campaign_id=campaign.id, send=send_email,
                             to_email=lead.email,
                             subject=subject,
                             body=send_body,
@@ -1145,6 +1149,8 @@ async def send_slot_job(slot_id: int) -> None:
     log.info("send_slot_job: slot_id=%d firing at %s", slot_id, now.isoformat())
 
     async with AsyncSessionLocal() as session:
+        if not await campaign_sending_allowed(session):
+            return
         # ── Load slot + all related entities in one query ────────────────
         slot_res = await session.execute(
             select(QueueSlot, CampaignLead, Campaign, Lead, Sequence, Inbox)
@@ -1670,8 +1676,9 @@ async def send_slot_job(slot_id: int) -> None:
             # run it in a worker thread so a slow or hanging relay cannot stall
             # the event loop (and every HTTP request served by it).
             try:
-                result = await asyncio.to_thread(
-                    send_email,
+                result = await guarded_send(
+                    session, inbox, operation_key=f"campaign:{cl.id}:{slot.sequence_index}",
+                    kind="campaign", lead=lead, campaign_id=campaign.id, send=send_email,
                     to_email=lead.email,
                     subject=subject,
                     body=send_body,

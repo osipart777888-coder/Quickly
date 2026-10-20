@@ -24,7 +24,7 @@ elif db_url.startswith("postgresql://"):
 # across multiple connections.  This is primarily for the test suite when
 # ``TEST_DATABASE_URL`` is set to a memory URL; production (Postgres) is
 # unaffected.
-engine_kwargs: dict = {"echo": False}
+engine_kwargs: dict = {"echo": False, "hide_parameters": True}
 if db_url.startswith("sqlite"):
     from sqlalchemy.pool import StaticPool
 
@@ -81,6 +81,9 @@ async def _run_migrations(conn) -> None:
         return
 
     pg_alters = [
+        "ALTER TABLE inbox ALTER COLUMN beacon_setup_token TYPE TEXT",
+        "ALTER TABLE inbox ALTER COLUMN beacon_webhook_secret TYPE TEXT",
+        "ALTER TABLE webhook ALTER COLUMN secret TYPE TEXT",
         # 2026-03-24: ramp-up starting number (default 1 preserves old behaviour)
         "ALTER TABLE inbox ADD COLUMN IF NOT EXISTS ramp_up_start INTEGER NOT NULL DEFAULT 1",
         # 2026-03-24: track when ramp-up was last enabled (NULL = use created_at as fallback)
@@ -313,3 +316,7 @@ async def init_db():
     # Load settings from database into memory
     async with AsyncSessionLocal() as session:
         await initialize_settings(session)
+        import os
+        if os.getenv("QUICKLY_REQUIRE_EXTERNAL_KEYS", "").lower() == "true":
+            from app.local_secrets import encrypt_existing_local_secrets
+            await encrypt_existing_local_secrets(session)

@@ -21,11 +21,14 @@ import { useSystemHealth } from '../../context/SystemHealthContext';
 
 // links including icons
 const links = [
+  { to: '/', label: 'Home', icon: <RiLineChartLine size={20} /> },
+  { to: '/diagnostics', label: 'Warm-up & diagnostics', icon: <RiHeartPulseLine size={20} /> },
+  { to: '/send-log', label: 'Sending log', icon: <RiMailLine size={20} /> },
   { to: '/analytics', label: 'Analytics', icon: <RiLineChartLine size={20} /> },
   { to: '/campaigns', label: 'Campaigns', icon: <RiSendPlaneLine size={20} /> },
-  { to: '/leads', label: 'Leads', icon: <RiContactsLine size={20} /> },
-  { to: '/inboxes', label: 'Inboxes', icon: <RiMailLine size={20} /> },
-  { to: '/unibox', label: 'Unibox', icon: <RiInboxLine size={20} /> },
+  { to: '/leads', label: 'Contacts', icon: <RiContactsLine size={20} /> },
+  { to: '/inboxes', label: 'Sending accounts', icon: <RiMailLine size={20} /> },
+  { to: '/unibox', label: 'Unified inbox', icon: <RiInboxLine size={20} /> },
   { to: '/schedule', label: 'Schedule', icon: <RiCalendarScheduleLine size={20} /> },
   { to: '/notifications', label: 'Notifications', icon: <RiNotification3Line size={20} /> },
   { to: '/settings#general', label: 'Settings', icon: <RiSettingsLine size={20} /> },
@@ -120,12 +123,12 @@ export default function Sidebar({ collapsed, onToggle }) {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-  const widthClass = collapsed ? 'w-16' : 'w-44';
+  const widthClass = collapsed ? 'w-16' : 'w-64';
   const justifyLogo = collapsed ? 'justify-center' : '';
 
   return (
     <nav
-      className={`fixed top-0 left-0 z-40 h-full bg-gray-800 text-gray-300 flex flex-col p-3 transition-width duration-200 ${
+      className={`fixed top-0 left-0 z-40 h-full overflow-y-auto bg-gray-800 text-gray-300 flex flex-col p-3 transition-width duration-200 ${
         widthClass
       }`}
     >
@@ -146,11 +149,11 @@ export default function Sidebar({ collapsed, onToggle }) {
           <div key={l.to} className="relative group">
             <NavLink
               to={l.to}
+              aria-label={l.label}
               end
               className={({ isActive }) => {
                 const active =
                   isActive ||
-                  (l.to === '/analytics' && location.pathname === '/') ||
                   (l.to.startsWith('/settings') && location.pathname === '/settings');
                 return `flex items-center py-2 rounded px-2 transition-colors transition-transform transform-gpu active:scale-95 hover:scale-102 duration-150 whitespace-nowrap !no-underline !hover:no-underline ${
                   active

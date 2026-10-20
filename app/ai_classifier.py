@@ -244,6 +244,10 @@ async def classify_reply(
     Returns ``None`` if the feature is disabled, settings are incomplete, or the
     provider call fails.  The caller must handle ``None`` gracefully.
     """
+    from app.local_send import local_install
+    if local_install():
+        from app.local_classifier import classify_local_reply
+        return classify_local_reply(reply_text)
     settings = await _get_feature_settings(db, "reply_classifier")
     enabled = settings.get("enabled", "false").lower() in ("true", "1", "yes")
     provider = settings.get("provider", "")

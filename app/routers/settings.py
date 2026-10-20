@@ -401,7 +401,8 @@ async def set_telemetry_endpoint(
 
         await set_telemetry_enabled(db, payload.telemetry_enabled)
         await db.commit()
-        return {"ok": True, "telemetry_enabled": payload.telemetry_enabled}
+        from app.app_settings import get_telemetry_enabled
+        return {"ok": True, "telemetry_enabled": await get_telemetry_enabled(db)}
     except Exception as e:
         log.error("set_telemetry failed: %s", e)
         raise HTTPException(500, f"Failed to update telemetry: {e}")

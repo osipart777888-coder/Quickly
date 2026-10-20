@@ -57,6 +57,7 @@ class LeadRecoverRequest(BaseModel):
 
 
 class LeadResponse(BaseModel):
+    status: str = "active"
     id: int
     email: str
     name: str

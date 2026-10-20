@@ -66,7 +66,7 @@ async def test_test_mode_settings_api(engine):
 
 
 @pytest.mark.asyncio
-async def test_add_opens_setting_endpoint(session):
+async def test_add_opens_setting_endpoint(session, authenticated_api):
     """Verify the ``POST /api/settings/add-opens`` helper adds events.
 
     Create a minimal email log then invoke the new endpoint via HTTP;
@@ -176,3 +176,17 @@ async def test_google_oauth_credentials_ignore_db(engine):
         cid, csec = await get_google_oauth_credentials(db)
         assert cid == "env-id"
         assert csec == "env-secret"
+
+
+@pytest.fixture
+def authenticated_api():
+    from types import SimpleNamespace
+    from app.main import app
+    from app.auth import get_current_user
+    async def admin():
+        return SimpleNamespace(id=1, role="admin", is_active=True)
+    app.dependency_overrides[get_current_user] = admin
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)

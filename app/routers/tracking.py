@@ -77,6 +77,7 @@ async def click_redirect(
     return RedirectResponse(url=dest, status_code=302)
 
 
+@router.post("/u/{token}", include_in_schema=False)
 @router.get("/u/{token}", include_in_schema=False)
 async def unsubscribe(
     token: str,

@@ -1,6 +1,9 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect } from 'react';
 import Layout from './components/Layout';
+import LocalDashboard from './pages/LocalDashboard';
+import SendLog from './pages/SendLog';
+import Diagnostics from './pages/Diagnostics';
 import Campaigns from './pages/Campaigns';
 import AddCampaign from './pages/AddCampaign';
 import CampaignDetail from './pages/CampaignDetail';
@@ -56,7 +59,9 @@ function AppRoutes() {
         <ProtectedRoute>
           <Layout>
             <Routes>
-              <Route path="/" element={<Analytics />} />
+              <Route path="/" element={<LocalDashboard />} />
+              <Route path="/send-log" element={<SendLog />} />
+              <Route path="/diagnostics" element={<Diagnostics />} />
               <Route path="/campaigns" element={<Campaigns />} />
               <Route path="/campaigns/add" element={<AddCampaign />} />
               <Route path="/campaigns/:id" element={<CampaignDetail />} />

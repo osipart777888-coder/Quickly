@@ -1,3 +1,4 @@
+import AccountTools from '../components/local/AccountTools';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { api, apiCache } from '../api';
 import { Button } from '../components/ui/Button';
@@ -1562,6 +1563,7 @@ export default function Inboxes() {
         </Button>
       </div>
 
+      <div className="mb-6"><AccountTools onChanged={() => window.location.reload()} /></div>
       {inboxes.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center mb-4">

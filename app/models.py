@@ -26,7 +26,7 @@ from sqlalchemy.orm import relationship
 from app.time import utcnow as _utcnow
 
 from app.database import Base
-from app.security import EncryptedText
+from app.security import EncryptedText, LocalSettingsText
 
 
 def _make_public_id() -> str:
@@ -107,8 +107,8 @@ class Inbox(Base):
     tracking_domain = Column(String(255), nullable=True, default=None)
     # Beacon (standalone tracking proxy): when connected, tracking URLs use beacon_base_url.
     beacon_base_url = Column(String(512), nullable=True, default=None)
-    beacon_setup_token = Column(String(128), nullable=True, default=None)
-    beacon_webhook_secret = Column(String(256), nullable=True, default=None)
+    beacon_setup_token = Column(EncryptedText, nullable=True, default=None)
+    beacon_webhook_secret = Column(EncryptedText, nullable=True, default=None)
     beacon_connected = Column(Boolean, default=False, nullable=False)
     connect_token = Column(String(256), nullable=True, unique=True)
     connect_token_expires_at = Column(DateTime, nullable=True, default=None)
@@ -499,7 +499,7 @@ class AppSetting(Base):
     """
     __tablename__ = "app_setting"
     key = Column(String(255), primary_key=True, nullable=False)
-    value = Column(Text, nullable=False, default="")
+    value = Column(LocalSettingsText, nullable=False, default="")
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
@@ -846,7 +846,7 @@ class Webhook(Base):
     __tablename__ = "webhook"
     id = Column(Integer, primary_key=True, index=True)
     url = Column(String(1024), nullable=False)
-    secret = Column(String(512), default="")  # Bearer token for authentication
+    secret = Column(EncryptedText, default="")  # Bearer token for authentication
     events = Column(JSON, default=list)  # e.g. ["email.sent", "email.opened"]
     active = Column(Boolean, default=True, nullable=False)
     description = Column(String(255), default="")  # optional human-readable label
@@ -964,3 +964,6 @@ WEBHOOK_EVENT_TYPES = [
     "token_expired",       # OAuth refresh or SMTP/IMAP login failed (see data.provider/error_type)
     "inbox.send_failing",  # An SMTP inbox failed to send repeatedly (see data.last_send_error)
 ]
+
+# Local-install extension tables share the existing PostgreSQL database.
+from app import local_models as _local_models  # noqa: E402,F401

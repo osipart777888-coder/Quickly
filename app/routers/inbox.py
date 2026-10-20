@@ -224,6 +224,19 @@ async def list_inboxes(db: AsyncSession = Depends(get_db)):
 
 @router.post("", response_model=InboxResponse)
 async def create_inbox(data: InboxCreate, db: AsyncSession = Depends(get_db)):
+    from app.local_send import local_install
+    if local_install():
+        from app.local_imports import email_address
+        try:
+            data.email = email_address(data.email)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if data.provider == "smtp" and data.email.rsplit("@", 1)[1] in {"gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com"}:
+            raise HTTPException(400, "Gmail и Microsoft/Outlook подключаются через OAuth")
+        if not 1 <= data.max_emails_per_day <= 100000:
+            raise HTTPException(400, "Укажите положительный дневной лимит в пределах правил провайдера")
+        if await db.scalar(select(Inbox.id).where(Inbox.email == data.email)):
+            raise HTTPException(409, "Такой ящик уже добавлен")
     # Normalise tracking domain: strip scheme, paths, whitespace
     td = _normalise_tracking_domain(data.tracking_domain)
     inbox = Inbox(
@@ -313,6 +326,8 @@ async def update_inbox(
     if data.display_name is not None:
         inbox.display_name = data.display_name
     if data.max_emails_per_day is not None:
+        if not 1 <= data.max_emails_per_day <= 100000:
+            raise HTTPException(400, "Укажите положительный дневной лимит")
         inbox.max_emails_per_day = data.max_emails_per_day
         capacity_changed = True
     if data.wait_minutes_between is not None:
@@ -614,6 +629,11 @@ async def delete_inbox(inbox_id: int, db: AsyncSession = Depends(get_db)):
     inbox = result.scalar_one_or_none()
     if not inbox:
         raise HTTPException(404, "Inbox not found")
+    # Keep campaign assignments and delivery history intact; pause/archive first.
+    from app.local_models import MailOperation, SenderDayQuota
+    for model in (CampaignInbox, QueueSlot, MailOperation, SenderDayQuota):
+        if await db.scalar(select(exists().where(model.inbox_id == inbox_id))):
+            raise HTTPException(400, "Ящик используется кампанией, очередью или журналом. Приостановите его; история сохраняется.")
     # Remove campaign assignments referencing this inbox
     await db.execute(
         CampaignInbox.__table__.delete().where(CampaignInbox.inbox_id == inbox_id)

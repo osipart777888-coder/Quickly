@@ -110,6 +110,9 @@ async def get_test_mode(db: AsyncSession) -> bool:
 
 async def set_test_mode(db: AsyncSession, enabled: bool) -> None:
     """Enable or disable test mode."""
+    from app.local_send import local_install
+    if enabled and local_install():
+        raise ValueError("Имитация отключена в рабочей локальной установке; используйте локальный SMTP/IMAP-стенд")
     await put_setting(db, TEST_MODE_KEY, "true" if enabled else "false")
     await db.flush()
     # Reload settings into memory cache
@@ -122,6 +125,9 @@ async def set_test_mode(db: AsyncSession, enabled: bool) -> None:
 
 async def get_telemetry_enabled(db: AsyncSession) -> bool:
     """Return the in-app telemetry toggle (opt-out by default)."""
+    from app.local_send import local_install
+    if local_install():
+        return False
     value = await get_setting(db, TELEMETRY_ENABLED_KEY)
     if value is None:
         return True
@@ -130,6 +136,9 @@ async def get_telemetry_enabled(db: AsyncSession) -> bool:
 
 async def set_telemetry_enabled(db: AsyncSession, enabled: bool) -> None:
     """Enable or disable anonymous usage telemetry from the settings UI."""
+    from app.local_send import local_install
+    if local_install():
+        enabled = False
     await put_setting(db, TELEMETRY_ENABLED_KEY, "true" if enabled else "false")
     await db.flush()
     from app.settings_manager import reload_settings

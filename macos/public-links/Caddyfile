@@ -1,0 +1,12 @@
+{
+    email {$ACME_EMAIL}
+}
+{$QUICKLY_LINK_DOMAIN} {
+    @publicLinks path /u/* /o/* /c/*
+    handle @publicLinks {
+        reverse_proxy app:8000
+    }
+    handle {
+        respond "Not found" 404
+    }
+}

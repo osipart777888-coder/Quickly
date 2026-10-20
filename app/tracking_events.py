@@ -210,6 +210,18 @@ async def process_unsubscribe(db: AsyncSession, token: str) -> tuple[str, int]:
             )
         await db.execute(delete(QueueSlot).where(QueueSlot.campaign_lead_id == cl.id))
 
+    from app.local_send import local_install
+    if local_install() and lead:
+        from sqlalchemy import update, func
+        from app.local_models import Suppression
+        normalized = lead.email.strip().lower()
+        if not await db.get(Suppression, normalized):
+            db.add(Suppression(email=normalized, reason='Отписка по ссылке'))
+        ids = select(Lead.id).where(func.lower(Lead.email) == normalized)
+        await db.execute(update(Lead).where(Lead.id.in_(ids)).values(status='unsubscribed'))
+        enrollments = select(CampaignLead.id).where(CampaignLead.lead_id.in_(ids))
+        await db.execute(delete(QueueSlot).where(QueueSlot.campaign_lead_id.in_(enrollments)))
+        await db.execute(update(CampaignLead).where(CampaignLead.lead_id.in_(ids)).values(sending_paused=True, enrollment_status='unsubscribed'))
     await db.commit()
 
     if not already_done and lead and cl:
@@ -237,4 +249,6 @@ async def process_unsubscribe(db: AsyncSession, token: str) -> tuple[str, int]:
         )
 
     html = ALREADY_UNSUBSCRIBED_HTML if already_done else _UNSUBSCRIBE_HTML
+    if local_install():
+        html = '<!doctype html><html lang="ru"><meta charset="utf-8"><title>Отписка</title><body><h1>Вы отписались</h1><p>Отправка на ваш адрес прекращена во всех кампаниях этого отправителя.</p></body></html>'
     return html, 200

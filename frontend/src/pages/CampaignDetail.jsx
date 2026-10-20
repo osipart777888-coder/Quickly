@@ -7,6 +7,7 @@ import { Button } from '../components/ui/Button';
 import { FileUploadArea } from '../components/ui/FileUploadArea';
 import { Card } from '../components/ui/Card';
 import EmailContent from '../components/EmailContent';
+import CampaignReadiness from '../components/local/CampaignReadiness';
 import DatePicker from '../components/ui/DatePicker';
 import { useConfirm } from '../context/ConfirmContext';
 import { useAppMode } from '../context/AppModeContext';
@@ -16,8 +17,7 @@ import {
   formatTimeKey,
   normalizeTimeZone,
 } from '../utils/datetime';
-import ReactQuill from 'react-quill';
-import 'react-quill/dist/quill.snow.css';
+import ReactQuill from '../components/LocalizedQuill';
 import {
   ResponsiveContainer,
   AreaChart as ReAreaChart,
@@ -263,8 +263,9 @@ export default function CampaignDetail() {
         )}
       </div>
 
+      <CampaignReadiness id={id} refresh={loadAll}/>
       {/* tab bar */}
-      <div className="flex gap-1 mb-6 border-b border-gray-200">
+      <div className="flex gap-1 mb-6 border-b border-gray-200 overflow-x-auto shrink-0">
         {TABS.map(tab => (
           <button
             key={tab}
@@ -2970,12 +2971,12 @@ function SequencesTab({ sequences, campaignId, campaign, leads, refresh }) {
   };
 
   return (
-    <div className="flex gap-0 min-h-[520px] rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
+    <div className="flex flex-col xl:flex-row gap-0 min-h-[520px] rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
       {/* ── Left: Step timeline ── */}
-      <div className="w-72 shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col">
+      <div className="w-full xl:w-72 shrink-0 border-b xl:border-b-0 xl:border-r border-gray-200 bg-gray-50 flex flex-col">
         <div className="px-4 py-3 border-b border-gray-200">
           <h3 className="text-sm font-semibold text-gray-700">Sequence Steps</h3>
-          <p className="text-xs text-gray-400 mt-0.5">{sequences.length} step{sequences.length !== 1 ? 's' : ''}</p>
+          <p className="text-xs text-gray-400 mt-0.5">Steps: {sequences.length}</p>
         </div>
         <div className="flex-1 overflow-y-auto px-3 py-3">
           {sequences.length === 0 && (

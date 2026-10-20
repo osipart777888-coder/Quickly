@@ -38,6 +38,7 @@ class Settings:
             "postgresql+asyncpg://postgres:postgres@localhost/quickly",
         )
         
+        self.smtp_trusted_proxy_hosts = set(h.strip().lower() for h in os.getenv("SMTP_TRUSTED_PROXY_HOSTS", "").split(",") if h.strip())
         # Base URL (used by Google redirect calculation, links, etc.). Initial
         # default from env; DB restore may overwrite until startup reconciliation.
         self.base_url: str = os.getenv("BASE_URL", "http://localhost:8000")
@@ -106,6 +107,13 @@ class Settings:
     
     def reload_from_dict(self, data: dict):
         """Update settings from a dictionary (typically loaded from DB)."""
+        if "local_smtp_trusted_proxy_hosts" in data:
+            import json
+            try:
+                import os
+                self.smtp_trusted_proxy_hosts = set(json.loads(data["local_smtp_trusted_proxy_hosts"])) | set(h.strip().lower() for h in os.getenv("SMTP_TRUSTED_PROXY_HOSTS", "").split(",") if h.strip())
+            except (ValueError, TypeError):
+                pass
         if "database_url" in data:
             self.database_url = data["database_url"]
         if "base_url" in data:
