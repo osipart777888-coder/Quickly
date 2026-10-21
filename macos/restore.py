@@ -30,6 +30,22 @@ db('createdb','-U','quickly',restored)
 try:
     with backup.open('rb') as source:
         db('pg_restore','-U','quickly','-d',restored,'--no-owner','--no-privileges','--exit-on-error',stdin=source)
+    # Validate the external key and pause restored schedules before the live DB is switched.
+    preflight_code = '''
+import os,sys,asyncio
+from sqlalchemy.engine import make_url
+os.environ['DATABASE_URL']=make_url(os.environ['DATABASE_URL']).set(database=sys.argv[1]).render_as_string(hide_password=False)
+from app.backup_pg import _verify_restored_database,sync_connection_uri
+_verify_restored_database(sync_connection_uri(os.environ['DATABASE_URL']))
+from fastapi import BackgroundTasks
+from app.backup_restore_ops import reinitialize_after_restore
+from app.database import engine
+async def prepare():
+    await reinitialize_after_restore(BackgroundTasks())
+    await engine.dispose()
+asyncio.run(prepare())
+'''
+    run(compose + ['run','--rm','--no-deps','app','python','-c',preflight_code,restored])
 except BaseException:
     db('dropdb','-U','quickly',restored)
     raise
@@ -52,4 +68,4 @@ except BaseException:
         sql(f'ALTER DATABASE {previous} RENAME TO quickly')
     run(compose + ['up','-d','app'])
     raise RuntimeError('Восстановление не активировано. Предыдущая база возвращена. Проверьте совместимость копии и внешнего ключа.') from None
-print('Восстановление завершено. Предыдущая база сохранена под именем ' + previous)
+print('Восстановление завершено. Отправки остановлены; проверьте настройки перед возобновлением. Предыдущая база сохранена под именем ' + previous)

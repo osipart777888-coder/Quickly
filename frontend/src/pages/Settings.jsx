@@ -122,6 +122,7 @@ export default function Settings() {
   const [apiKeys, setApiKeys] = useState([]);
   const [newKeyName, setNewKeyName] = useState('');
   const [newKeyExpiry, setNewKeyExpiry] = useState('');
+  const [newKeyScope, setNewKeyScope] = useState('full');
   const [createdKey, setCreatedKey] = useState(null); // shown once after creation
 
   // MCP (Cursor / AI agents)
@@ -609,6 +610,7 @@ export default function Settings() {
     try {
       const res = await api.post('/auth/api-keys', {
         name: newKeyName,
+        scopes: newKeyScope==='full'?[]:newKeyScope==='read'?['read']:newKeyScope==='leads:read'?['leads:read']:['leads:read','leads:write'],
         ...(newKeyExpiry ? { expires_in_days: parseInt(newKeyExpiry, 10) } : {}),
       });
       setCreatedKey(res.key);
@@ -2070,6 +2072,7 @@ export default function Settings() {
                   onChange={e => setNewKeyExpiry(e.target.value)}
                 />
               </div>
+              <label className="text-xs text-gray-500">Access permissions<select value={newKeyScope} onChange={e=>setNewKeyScope(e.target.value)} className="block border rounded-lg p-2 text-sm"><option value="full">Full access</option><option value="read">Read only</option><option value="leads:read">Contacts: read only</option><option value="leads:write">Contacts: read and write</option></select></label>
               <Button size="sm" onClick={createApiKey} disabled={!newKeyName.trim()}>Create</Button>
             </div>
           </Card>

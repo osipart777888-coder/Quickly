@@ -11,7 +11,7 @@ import uuid
 from zoneinfo import ZoneInfo
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
-from app.local_models import MailOperation, SenderDayQuota, SendControl, Suppression
+from app.local_models import MailOperation, SenderDayQuota, SendControl, Suppression, SenderPacing
 from app.models import EmailLog, Lead, Campaign, AppSetting
 from app.queue_logic import compute_effective_daily_limit
 from app.sender import SendFailure, SendResult
@@ -77,12 +77,47 @@ def public_links_error(inbox):
     return ''
 
 
-async def reserve_operation(db, inbox, *, operation_key, recipient, kind, lead=None, campaign_id=None):
-    """Reserve quota and persist the intent before any network send.
+class DeferredReason(str):
+    pass
 
-    The conditional UPDATE serializes competing PostgreSQL transactions; the
-    unique operation key protects the same campaign step across restarts.
-    """
+
+async def sender_ready(db, inbox, *, now=None):
+    """Read-only readiness; the definitive pacing claim is atomic in reserve_operation."""
+    return inbox.id in await ready_sender_ids(db,[inbox],now=now)
+
+
+async def ready_sender_ids(db, inboxes, *, now=None):
+    now = now or utcnow()
+    if not inboxes:
+        return set()
+    ids = [i.id for i in inboxes]
+    last = dict((await db.execute(select(SenderPacing.inbox_id,SenderPacing.last_reserved_at)
+        .where(SenderPacing.inbox_id.in_(ids)))).all())
+    missing = set(ids)-last.keys()
+    if missing:
+        last.update(dict((await db.execute(select(EmailLog.inbox_id,func.max(EmailLog.sent_at))
+            .where(EmailLog.inbox_id.in_(missing)).group_by(EmailLog.inbox_id))).all()))
+    return {i.id for i in inboxes if not last.get(i.id) or last[i.id]+timedelta(minutes=max(0,i.wait_minutes_between or 0)) <= now}
+
+
+async def authorize_rejected_retries(db, inbox_id):
+    """Explicit resume authorizes only known pre-delivery authentication refusals."""
+    rows = (await db.execute(select(MailOperation).where(MailOperation.inbox_id == inbox_id,
+        MailOperation.kind == 'campaign',MailOperation.status == 'rejected',MailOperation.retry_safe == True)
+        .with_for_update())).scalars().all()
+    for row in rows:
+        # Keep the refused attempt and its quota charge; free the business key
+        # for one new atomic claim. Accepted/uncertain operations are never changed.
+        row.operation_key = row.operation_key[:210] + ':retry-' + row.id
+        row.retry_safe = False
+        row.error += ' · Повтор разрешён владельцем при возобновлении ящика'
+    await db.flush()
+    return len(rows)
+
+
+async def reserve_operation(db, inbox, *, operation_key, recipient, kind, lead=None, campaign_id=None,
+                            diagnostic_plan_id=None, diagnostic_initial=False):
+    """Commit mailbox/group budgets, pacing and the unique intent together before network."""
     control = await db.get(SendControl, 1, populate_existing=True)
     if control and control.emergency_stopped:
         return None, 'Аварийная остановка включена'
@@ -95,7 +130,7 @@ async def reserve_operation(db, inbox, *, operation_key, recipient, kind, lead=N
         error = public_links_error(inbox)
         if error:
             return None, error
-    await db.refresh(inbox, attribute_names=['paused', 'max_emails_per_day'])
+    await db.refresh(inbox, attribute_names=['paused', 'max_emails_per_day', 'wait_minutes_between'])
     if inbox.paused:
         return None, 'Ящик приостановлен'
     error = await contact_send_error(db, recipient, lead if kind == 'campaign' else None)
@@ -113,27 +148,46 @@ async def reserve_operation(db, inbox, *, operation_key, recipient, kind, lead=N
         from sqlalchemy.dialects.postgresql import insert
     else:
         from sqlalchemy.dialects.sqlite import insert
-    await db.execute(insert(SenderDayQuota).values(inbox_id=inbox.id, day=day, used=existing).on_conflict_do_nothing(index_elements=['inbox_id', 'day']))
+    await db.execute(insert(SenderDayQuota).values(inbox_id=inbox.id, day=day, used=existing)
+        .on_conflict_do_nothing(index_elements=['inbox_id', 'day']))
+    last = await db.scalar(select(func.max(EmailLog.sent_at)).where(EmailLog.inbox_id == inbox.id))
+    await db.execute(insert(SenderPacing).values(inbox_id=inbox.id,last_reserved_at=last or datetime(1970,1,1))
+        .on_conflict_do_nothing(index_elements=['inbox_id']))
+    now = utcnow()
     operation = MailOperation(operation_key=operation_key, inbox_id=inbox.id, recipient=recipient,
                               kind=kind, campaign_id=campaign_id, status='reserved')
     try:
         async with db.begin_nested():
+            condition = [SenderPacing.inbox_id == inbox.id]
+            if kind in {'campaign','diagnostic'}:
+                condition.append(SenderPacing.last_reserved_at <= now-timedelta(minutes=max(0,inbox.wait_minutes_between or 0)))
+            paced = await db.scalar(update(SenderPacing).where(*condition).values(last_reserved_at=now)
+                .returning(SenderPacing.inbox_id))
+            if paced is None:
+                raise ValueError(DeferredReason('Пауза между автоматическими письмами ещё не закончилась'))
             db.add(operation)
             await db.flush()
+            used = await db.scalar(update(SenderDayQuota).where(
+                SenderDayQuota.inbox_id == inbox.id, SenderDayQuota.day == day, SenderDayQuota.used < limit,
+            ).values(used=SenderDayQuota.used + 1).returning(SenderDayQuota.used))
+            if used is None:
+                raise ValueError(f'Дневной лимит ящика исчерпан ({limit})')
+            if diagnostic_plan_id:
+                from app.local_models import DiagnosticPlan
+                from app.local_diagnostics import plan_budget
+                plan = await db.get(DiagnosticPlan,diagnostic_plan_id,populate_existing=True)
+                if not plan or not plan.enabled:
+                    raise ValueError('Расписание диагностики остановлено')
+                await plan_budget(db,plan,inbox.id if diagnostic_initial else None,commit=False)
     except IntegrityError:
         return None, 'Эта операция уже зарезервирована другим обработчиком'
-    used = await db.scalar(update(SenderDayQuota).where(
-        SenderDayQuota.inbox_id == inbox.id, SenderDayQuota.day == day, SenderDayQuota.used < limit,
-    ).values(used=SenderDayQuota.used + 1).returning(SenderDayQuota.used))
-    if used is None:
-        await db.delete(operation)
-        await db.flush()
-        return None, f'Дневной лимит ящика исчерпан ({limit})'
+    except ValueError as exc:
+        return None, exc.args[0]
     await db.commit()
     return operation, ''
 
 
-async def guarded_send(db, inbox, *, operation_key=None, kind='manual', lead=None, campaign_id=None, diagnostic_plan_id=None, send, **kwargs):
+async def guarded_send(db, inbox, *, operation_key=None, kind='manual', lead=None, campaign_id=None, diagnostic_plan_id=None, diagnostic_initial=False, send, **kwargs):
     if not local_install():
         return await asyncio.to_thread(send, **kwargs)
     from app.local_models import DiagnosticPlan
@@ -141,9 +195,9 @@ async def guarded_send(db, inbox, *, operation_key=None, kind='manual', lead=Non
         return SendFailure('local_block', 'Расписание диагностики остановлено')
     key = operation_key or f'{kind}:{uuid.uuid4().hex}'
     operation, error = await reserve_operation(db, inbox, operation_key=key, recipient=kwargs.get('to_email', ''),
-                                             kind=kind, lead=lead, campaign_id=campaign_id)
+                                             kind=kind, lead=lead, campaign_id=campaign_id, diagnostic_plan_id=diagnostic_plan_id, diagnostic_initial=diagnostic_initial)
     if error:
-        return SendFailure('local_block', error)
+        return SendFailure('local_deferred' if isinstance(error,DeferredReason) else 'local_block', str(error))
     # A stop pressed after reservation still prevents a send that has not begun.
     control = await db.get(SendControl, 1, populate_existing=True)
     plan_stopped = diagnostic_plan_id and not await db.scalar(select(DiagnosticPlan.enabled).where(DiagnosticPlan.id == diagnostic_plan_id))
@@ -169,6 +223,7 @@ async def guarded_send(db, inbox, *, operation_key=None, kind='manual', lead=Non
     elif isinstance(result, SendFailure):
         operation.status = 'rejected'
         operation.error = result.message[:2000]
+        operation.retry_safe = result.error_type in {'auth_failed','permission_denied'}
         if result.error_type in {'auth_failed', 'permission_denied'}:
             inbox.paused = True
         # Include this refusal in the persisted threshold calculation.

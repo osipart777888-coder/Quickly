@@ -1,5 +1,7 @@
 """Explicitly labelled diagnostics between configured accounts owned by the user."""
 from __future__ import annotations
+from app.maintenance import background_work
+
 import asyncio
 from datetime import timedelta
 from email import policy
@@ -39,7 +41,7 @@ async def send_arguments(db, inbox):
     return {'gmail_account': account, 'google_client_id': cid, 'google_client_secret': secret}
 
 
-async def plan_budget(db, plan, sender_id=None):
+async def plan_budget(db, plan, sender_id=None, *, commit=True):
     day, _, _ = day_bounds()
     if db.bind.dialect.name == 'postgresql':
         from sqlalchemy.dialects.postgresql import insert
@@ -65,7 +67,8 @@ async def plan_budget(db, plan, sender_id=None):
         ).values(used=DiagnosticDayQuota.used + 1).returning(DiagnosticDayQuota.used))
         if used is None:
             raise ValueError('Дневной предел диагностических писем группы исчерпан')
-    await db.commit()
+    if commit:
+        await db.commit()
 
 
 async def start_diagnostic(db, sender_id, recipient_id, plan=None):
@@ -92,10 +95,9 @@ async def execute_diagnostic(db, run, plan=None):
             await db.refresh(plan)
             if not plan.enabled:
                 raise ValueError('Расписание диагностики остановлено')
-            await plan_budget(db,plan,sender.id)
         args = await send_arguments(db,sender)
         result = await guarded_send(db,sender,operation_key=f'diagnostic:{run.id}',kind='diagnostic',
-            diagnostic_plan_id=plan.id if plan else None,send=send_email,
+            diagnostic_plan_id=plan.id if plan else None,diagnostic_initial=True,send=send_email,
             to_email=recipient.email,from_email=sender.email,from_name=sender.display_name,
             subject=f'[Quickly DIAGNOSTIC {run.id}] Проверка собственного ящика',
             body=('Автоматическое диагностическое сообщение Quickly.\n'
@@ -109,6 +111,10 @@ async def execute_diagnostic(db, run, plan=None):
             run.message_id = result.message_id or ''
             run.report = {'smtp_accepted':True,'received_confirmed':False,
                 'note':'Принято сервером отправителя. Получение пока не подтверждено.'}
+        elif getattr(result,'error_type','') == 'local_deferred' and plan and plan.mode == 'group':
+            run.status = 'queued'
+            run.started_at = None
+            run.error = result.message
         else:
             run.status = 'uncertain' if operation and operation.status == 'uncertain' else 'skipped' if getattr(result,'error_type','') == 'local_block' else 'failed'
             run.error = getattr(result,'message','') or 'Результат отправки неизвестен; автоматического повтора не будет'
@@ -277,7 +283,6 @@ async def send_diagnostic_reply(db, run, *, allow_claimed=False):
         plan = await db.get(DiagnosticPlan, run.plan_id)
         if not plan or not plan.enabled:
             raise ValueError('Расписание группы остановлено')
-        await plan_budget(db, plan)
     sender = await db.get(Inbox, run.recipient_id)
     recipient = await db.get(Inbox, run.sender_id)
     if not sender or not recipient or sender.paused or recipient.paused:
@@ -289,6 +294,8 @@ async def send_diagnostic_reply(db, run, *, allow_claimed=False):
         body=f'Автоматическое диагностическое подтверждение получения.\nНе является ответом клиента или заинтересованностью.\nПроверка: {run.id}',
         provider=sender.provider, reply_to_msg_id=run.message_id, references=run.message_id, **args)
     if not isinstance(result, SendResult):
+        if getattr(result,'error_type','') == 'local_deferred':
+            raise DiagnosticDeferred(result.message)
         raise ValueError(getattr(result, 'message', '') or 'Результат ответа неизвестен; повтор заблокирован')
     run.reply_message_id = result.message_id
     run.status = 'reply_sent'
@@ -297,6 +304,11 @@ async def send_diagnostic_reply(db, run, *, allow_claimed=False):
     return run
 
 
+@background_work
 async def run_diagnostic_job():
     from app.local_group_diagnostics import run_group_jobs
     await run_group_jobs()
+
+
+class DiagnosticDeferred(ValueError):
+    """An automatic reply remains pending until its mailbox pacing allows it."""

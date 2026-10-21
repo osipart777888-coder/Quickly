@@ -127,6 +127,21 @@ def decode_token(token: str) -> dict:
 
 _bearer_scheme = HTTPBearer(auto_error=False)
 
+API_KEY_SCOPES = {'read', 'write', '*', 'leads:read', 'leads:write'}
+
+
+def authorize_api_key(request: Request, key) -> None:
+    scopes = set(key.scopes or [])
+    # Empty scopes preserve existing full-access keys; explicit scopes are enforced.
+    if not scopes or '*' in scopes:
+        return
+    read = request.method in {'GET', 'HEAD', 'OPTIONS'}
+    resource = 'leads' if request.url.path.startswith('/api/leads') else None
+    required = 'read' if read else 'write'
+    if required in scopes or (resource and f'{resource}:{required}' in scopes):
+        return
+    raise HTTPException(status_code=403, detail='API key scope does not permit this action')
+
 
 async def resolve_current_user(
     request: Request,
@@ -151,6 +166,7 @@ async def resolve_current_user(
         ak = result.scalar_one_or_none()
         if ak is None:
             raise HTTPException(status_code=401, detail="Invalid API key")
+        authorize_api_key(request, ak)
         ak.last_used_at = utcnow()
         await db.flush()
         user = await db.get(User, ak.user_id)
@@ -175,6 +191,7 @@ async def resolve_current_user(
         ak = result.scalar_one_or_none()
         if ak is None:
             raise HTTPException(status_code=401, detail="Invalid API key")
+        authorize_api_key(request, ak)
         ak.last_used_at = utcnow()
         await db.flush()
         user = await db.get(User, ak.user_id)

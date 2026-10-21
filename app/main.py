@@ -220,6 +220,8 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from app.rate_limits import limiter
 
 
 def _get_real_ip(request: Request) -> str:
@@ -227,9 +229,11 @@ def _get_real_ip(request: Request) -> str:
     return client_ip_from_request(request) or "unknown"
 
 
-limiter = Limiter(key_func=_get_real_ip, default_limits=["200/minute"])
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+from app.maintenance import MaintenanceMiddleware
+app.add_middleware(MaintenanceMiddleware)
 
 # ---------------------------------------------------------------------------
 # Auth router (public endpoints: login, register, setup-status, restore-setup, refresh)

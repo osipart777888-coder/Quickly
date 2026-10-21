@@ -175,7 +175,8 @@ async def diagnostic_plans(db=Depends(get_db)):
     from app.local_models import DiagnosticPlan, DiagnosticDayQuota
     rows = (await db.execute(select(DiagnosticPlan).order_by(DiagnosticPlan.id.desc()))).scalars().all()
     counters = (await db.execute(select(DiagnosticRun.plan_id,DiagnosticRun.batch_id,DiagnosticRun.status,func.count())
-        .where(DiagnosticRun.plan_id.in_([p.id for p in rows]))
+        .join(DiagnosticPlan,DiagnosticPlan.id == DiagnosticRun.plan_id)
+        .where(DiagnosticRun.batch_id == DiagnosticPlan.last_batch_id)
         .group_by(DiagnosticRun.plan_id,DiagnosticRun.batch_id,DiagnosticRun.status))).all()
     budgets = dict((await db.execute(select(DiagnosticDayQuota.plan_id,DiagnosticDayQuota.used)
         .where(DiagnosticDayQuota.day == day_bounds()[0]))).all())
@@ -254,6 +255,33 @@ async def cancel_group_queue(plan_id: int, db=Depends(get_db), _admin=Depends(re
 
 class PlanToggle(BaseModel):
     enabled: bool
+
+
+class GroupSettings(BaseModel):
+    name: str = Field(min_length=1,max_length=255)
+    interval_minutes: int = Field(ge=15,le=43200)
+    per_account_daily_limit: int = Field(ge=1,le=100)
+    max_messages_per_day: int = Field(ge=1,le=100000)
+    auto_reply: bool
+    sending_days: list[int] = Field(min_length=1,max_length=7)
+    hours_start: str = Field(pattern=r'^([01]\d|2[0-3]):[0-5]\d$')
+    hours_end: str = Field(pattern=r'^([01]\d|2[0-3]):[0-5]\d$')
+
+
+@router.put('/diagnostics/plans/{plan_id}/settings')
+async def edit_group_settings(plan_id: int, data: GroupSettings, db=Depends(get_db), _admin=Depends(require_admin)):
+    from app.local_models import DiagnosticPlan
+    plan = await db.scalar(select(DiagnosticPlan).where(DiagnosticPlan.id == plan_id).with_for_update())
+    if not plan or plan.mode != 'group':
+        raise HTTPException(404,'Групповое расписание не найдено')
+    if any(day not in range(7) for day in data.sending_days) or data.hours_start >= data.hours_end:
+        raise HTTPException(400,'Укажите дни и корректный интервал часов')
+    for key,value in data.model_dump().items():
+        setattr(plan,key,value)
+    plan.enabled = False
+    plan.next_run_at = utcnow()
+    await db.flush()
+    return {'ok':True,'enabled':False,'pending_preserved':True}
 
 
 @router.put('/diagnostics/plans/{plan_id}')

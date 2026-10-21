@@ -29,6 +29,26 @@ from tests.conftest import (
 )
 
 
+@pytest.fixture(autouse=True)
+def fixed_sending_window_clock(monkeypatch):
+    """Worker tests always run inside their 09:00–17:00 UTC window, on a weekday."""
+    from datetime import timezone
+    from app import time as clock, queue_logic
+    import app.jobs as jobs
+    class FrozenDateTime(datetime):
+        @classmethod
+        def utcnow(cls):
+            return cls(2026,10,21,12,0)
+        @classmethod
+        def now(cls,tz=None):
+            value=cls.utcnow()
+            return value.replace(tzinfo=timezone.utc).astimezone(tz) if tz else value
+    monkeypatch.setattr(__import__(__name__,fromlist=['datetime']),'datetime',FrozenDateTime)
+    monkeypatch.setattr(clock,'datetime',FrozenDateTime)
+    monkeypatch.setattr(queue_logic,'datetime',FrozenDateTime)
+    monkeypatch.setattr(jobs,'datetime',FrozenDateTime)
+
+
 class _SessionCtx:
     def __init__(self, session):
         self.session = session

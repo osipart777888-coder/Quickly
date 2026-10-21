@@ -53,6 +53,7 @@ from app.database import AsyncSessionLocal, get_db
 from app.restore_preview_rate import allow_restore_preview
 from app.models import APIKey, User
 from app.time import utcnow
+from app.rate_limits import limiter
 
 log = logging.getLogger("quickly.auth.routes")
 
@@ -131,6 +132,14 @@ class CreateAPIKeyRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     scopes: list[str] = []
     expires_in_days: int | None = None  # None = no expiry
+
+    @field_validator('scopes')
+    @classmethod
+    def known_scopes(cls, values):
+        from app.auth import API_KEY_SCOPES
+        if set(values) - API_KEY_SCOPES:
+            raise ValueError('Supported scopes: read, write, leads:read, leads:write, *')
+        return sorted(set(values))
 
 
 class APIKeyResponse(BaseModel):
@@ -335,7 +344,8 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(data: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)):
+@limiter.limit('10/minute')
+async def login(data: LoginRequest, request: Request, response: Response, db: AsyncSession = Depends(get_db)):
     """Authenticate and return JWT tokens."""
     result = await db.execute(select(User).where(User.username == data.username.lower()))
     user = result.scalar_one_or_none()

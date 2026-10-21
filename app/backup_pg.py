@@ -71,31 +71,92 @@ def pg_dump_custom(database_url: str) -> bytes:
     return proc.stdout
 
 
+def _restore_strict(database_url, path, *, clean=False):
+    args = ['pg_restore','--no-owner','--no-privileges','--exit-on-error','--single-transaction']
+    if clean:
+        args += ['--clean','--if-exists']
+    result = subprocess.run(args+['-d',sync_connection_uri(database_url),str(path)],capture_output=True,timeout=7200)
+    if result.returncode != 0:
+        error = (result.stderr or b'').decode(errors='replace').strip()
+        raise BackupToolError(error or 'PostgreSQL restore failed; transaction rolled back')
+
+
+def _verify_restored_database(uri):
+    import psycopg2
+    from psycopg2 import sql
+    from app.database import Base
+    from app import models, local_models  # Register all encrypted columns before validation.
+    from app.security import EncryptedText, decrypt
+    with psycopg2.connect(uri) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT to_regclass('public.app_user')")
+            if not cursor.fetchone()[0]:
+                raise BackupToolError('Копия не содержит таблицу пользователей Quickly')
+            cursor.execute("SELECT count(*) FROM app_user WHERE role='admin' AND is_active=TRUE")
+            if not cursor.fetchone()[0]:
+                raise BackupToolError('В копии отсутствует активный администратор')
+            if os.getenv('QUICKLY_REQUIRE_EXTERNAL_KEYS','').lower() == 'true':
+                cursor.execute("SELECT table_name,column_name FROM information_schema.columns WHERE table_schema='public'")
+                columns = set(cursor.fetchall())
+                for table in Base.metadata.tables.values():
+                    for column in table.columns:
+                        if isinstance(column.type,EncryptedText) and (table.name,column.name) in columns:
+                            cursor.execute(sql.SQL('SELECT {} FROM {} WHERE {} IS NOT NULL').format(
+                                sql.Identifier(column.name),sql.Identifier(table.name),sql.Identifier(column.name)))
+                            for row in cursor:
+                                if row[0]:
+                                    decrypt(row[0])  # Reject a foreign encryption key before touching the live DB.
+
+
 def pg_restore_replace(database_url: str, dump_path: str | Path) -> None:
-    """Destructively restore custom-format dump (--clean --if-exists)."""
+    """Validate in a temporary DB, retain a snapshot, then replace in one transaction."""
     if not is_postgresql_url(database_url):
-        raise BackupUnsupportedError("Restore requires a PostgreSQL DATABASE_URL")
-    uri = sync_connection_uri(database_url)
-    path = str(dump_path)
-    proc = subprocess.run(
-        [
-            "pg_restore",
-            "--clean",
-            "--if-exists",
-            "--no-owner",
-            "-d",
-            uri,
-            path,
-        ],
-        capture_output=True,
-        timeout=7200,
-    )
-    stderr = (proc.stderr or b"").decode(errors="replace").strip()
-    if proc.returncode > 1:
-        log.error("pg_restore failed (rc=%s): %s", proc.returncode, stderr)
-        raise BackupToolError(stderr or "pg_restore failed")
-    if proc.returncode == 1 and stderr:
-        log.warning("pg_restore completed with warnings: %s", stderr)
+        raise BackupUnsupportedError('Restore requires PostgreSQL')
+    import uuid
+    import psycopg2
+    from psycopg2 import sql
+    from sqlalchemy.engine import make_url
+    url = make_url(sync_connection_uri(database_url))
+    candidate = 'quickly_restore_preflight_'+uuid.uuid4().hex[:20]
+    admin_uri = url.set(database='postgres').render_as_string(hide_password=False)
+    candidate_uri = url.set(database=candidate).render_as_string(hide_password=False)
+    created = False
+    try:
+        admin = psycopg2.connect(admin_uri)
+        admin.autocommit = True
+        try:
+            with admin.cursor() as cursor:
+                cursor.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(candidate)))
+                created = True
+        finally:
+            admin.close()
+        _restore_strict(candidate_uri,dump_path)
+        _verify_restored_database(candidate_uri)
+        recovery = Path.cwd()/'backups' if local_disk_backups_enabled() else Path(tempfile.gettempdir())/'quickly-recovery'
+        recovery.mkdir(parents=True,exist_ok=True,mode=0o700)
+        snapshot = recovery/('quickly-before-restore-'+uuid.uuid4().hex+'.dump')
+        previous = pg_dump_custom(database_url)
+        descriptor = os.open(snapshot,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+        with os.fdopen(descriptor,'wb') as target:
+            target.write(previous)
+        _restore_strict(database_url,dump_path,clean=True)
+        log.warning('Restore completed; previous database snapshot retained at %s',snapshot)
+    except BackupError:
+        raise
+    except Exception as exc:
+        raise BackupToolError('Копия не активирована: '+str(exc)) from exc
+    finally:
+        if created:
+            try:
+                admin = psycopg2.connect(admin_uri)
+                admin.autocommit = True
+                try:
+                    with admin.cursor() as cursor:
+                        cursor.execute(sql.SQL('DROP DATABASE {} WITH (FORCE)').format(sql.Identifier(candidate)))
+                finally:
+                    admin.close()
+            except Exception:
+                log.exception('Could not remove restore preflight database %s',candidate)
 
 
 def local_disk_backups_enabled() -> bool:

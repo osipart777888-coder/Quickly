@@ -81,6 +81,7 @@ async def _run_migrations(conn) -> None:
         return
 
     pg_alters = [
+        "ALTER TABLE local_mail_operation ADD COLUMN IF NOT EXISTS retry_safe BOOLEAN NOT NULL DEFAULT FALSE",
         "ALTER TABLE local_diagnostic_plan ADD COLUMN IF NOT EXISTS mode VARCHAR(16) NOT NULL DEFAULT 'pair'",
         "ALTER TABLE local_diagnostic_plan ADD COLUMN IF NOT EXISTS per_account_daily_limit INTEGER NOT NULL DEFAULT 1",
         "ALTER TABLE local_diagnostic_plan ADD COLUMN IF NOT EXISTS auto_reply BOOLEAN NOT NULL DEFAULT FALSE",

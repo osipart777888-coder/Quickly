@@ -21,6 +21,12 @@ class SenderDayQuota(Base):
     used = Column(Integer, nullable=False, default=0)
 
 
+class SenderPacing(Base):
+    __tablename__ = 'local_sender_pacing'
+    inbox_id = Column(Integer, ForeignKey('inbox.id'), primary_key=True)
+    last_reserved_at = Column(DateTime, nullable=False)
+
+
 class MailOperation(Base):
     __tablename__ = 'local_mail_operation'
     id = Column(String(32), primary_key=True, default=lambda: uuid.uuid4().hex)
@@ -32,6 +38,7 @@ class MailOperation(Base):
     status = Column(String(24), nullable=False, default='reserved')
     message_id = Column(String(512), nullable=False, default='')
     error = Column(Text, nullable=False, default='')
+    retry_safe = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, nullable=False, default=utcnow, index=True)
     finished_at = Column(DateTime, nullable=True)
 

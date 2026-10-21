@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, exists, update as sa_update
+from sqlalchemy import select, exists, func, update as sa_update
 
 from app.database import get_db
 from app.models import Inbox, CampaignInbox, QueueSlot, EmailLog, CampaignLead
@@ -153,11 +153,35 @@ async def _maybe_complete_ramp_up(inbox: Inbox, db: AsyncSession) -> None:
         await db.flush()
 
 
+async def _attach_local_counts(db, inboxes):
+    from app.local_send import local_install, day_bounds
+    if not local_install() or not inboxes:
+        return
+    from app.local_models import MailOperation, SenderDayQuota
+    day,start,end = day_bounds()
+    ids = [i.id for i in inboxes]
+    accepted = dict((await db.execute(select(MailOperation.inbox_id,func.count()).where(
+        MailOperation.inbox_id.in_(ids),MailOperation.status == 'accepted',
+        MailOperation.created_at >= start,MailOperation.created_at < end).group_by(MailOperation.inbox_id))).all())
+    # Include historical campaign logs not represented by the durable journal.
+    legacy = dict((await db.execute(select(EmailLog.inbox_id,func.count()).outerjoin(MailOperation,
+        (MailOperation.inbox_id == EmailLog.inbox_id) & (MailOperation.message_id == EmailLog.message_id))
+        .where(EmailLog.inbox_id.in_(ids),EmailLog.sent_at >= start,EmailLog.sent_at < end,
+            EmailLog.message_id.isnot(None),EmailLog.message_id != '',MailOperation.id.is_(None))
+        .group_by(EmailLog.inbox_id))).all())
+    quotas = dict((await db.execute(select(SenderDayQuota.inbox_id,SenderDayQuota.used)
+        .where(SenderDayQuota.inbox_id.in_(ids),SenderDayQuota.day == day))).all())
+    for inbox in inboxes:
+        inbox.sent_today = accepted.get(inbox.id,0)+legacy.get(inbox.id,0)
+        inbox.attempts_today = quotas.get(inbox.id,inbox.sent_today)
+
+
 async def _attach_smtp_health(db: AsyncSession, inboxes: list[Inbox]) -> None:
     """Attach real health + last send error to SMTP inboxes (no-op otherwise).
 
     OAuth inboxes keep ``health=None`` — their health lives in System Health.
     """
+    await _attach_local_counts(db,inboxes)
     smtp_ids = [i.id for i in inboxes if (i.provider or "") == "smtp"]
     if not smtp_ids:
         return
@@ -331,6 +355,8 @@ async def update_inbox(
         inbox.max_emails_per_day = data.max_emails_per_day
         capacity_changed = True
     if data.wait_minutes_between is not None:
+        if not 0 <= data.wait_minutes_between <= 1440:
+            raise HTTPException(400,'Пауза должна быть от 0 до 1440 минут')
         inbox.wait_minutes_between = data.wait_minutes_between
         capacity_changed = True
     if data.max_jitter_seconds is not None:
@@ -378,6 +404,11 @@ async def update_inbox(
                     inbox.ramp_up_started_at += paused_dur
             inbox.ramp_up_paused_at = None
         inbox.paused = data.paused
+        if not data.paused:
+            from app.local_send import authorize_rejected_retries
+            from app.jobs import clear_inbox_auth_failure
+            await authorize_rejected_retries(db,inbox.id)
+            clear_inbox_auth_failure(inbox.id)
     await db.flush()
     
     # If capacity or timing changed, recalculate queue globally rather than
@@ -581,6 +612,8 @@ async def unpause_inbox(
     inbox.ramp_up_paused_at = None
 
     inbox.paused = False
+    from app.local_send import authorize_rejected_retries
+    await authorize_rejected_retries(db,inbox.id)
     await db.flush()
 
     # A manual resume is an explicit operator statement that the credential is

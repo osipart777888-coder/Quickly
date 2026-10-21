@@ -20,8 +20,8 @@ def _offset_timedelta() -> timedelta:
 
 
 def now() -> datetime:
-    """Local "now" adjusted by configured offset."""
-    return datetime.now() + _offset_timedelta()
+    """Naive UTC, matching persisted timestamps; localize only at UI/window boundaries."""
+    return utcnow()
 
 
 def utcnow() -> datetime:

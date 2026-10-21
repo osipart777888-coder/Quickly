@@ -4,7 +4,7 @@ import pytest
 
 from app.models import Inbox
 from app.routers import inbox as inbox_router
-from tests.conftest import make_email_log
+from tests.conftest import make_email_log, make_campaign, make_lead
 
 
 @pytest.mark.asyncio
@@ -23,8 +23,12 @@ async def test_list_inboxes_sent_today(session):
     assert isinstance(listed, list)
     assert listed[0].sent_today == 0
 
+    campaign = await make_campaign(session)
+    lead1 = await make_lead(session,email="first@local.test")
+    lead2 = await make_lead(session,email="second@local.test")
+
     # insert a log timestamped today and verify the count increments
-    await make_email_log(session, lead_id=1, campaign_id=1, inbox_id=inbox.id)
+    await make_email_log(session, lead_id=lead1.id, campaign_id=campaign.id, inbox_id=inbox.id)
     await session.flush()
     listed = await inbox_router.list_inboxes(db=session)
     assert listed[0].sent_today == 1
@@ -33,8 +37,8 @@ async def test_list_inboxes_sent_today(session):
     yesterday = datetime.utcnow() - timedelta(days=1)
     await make_email_log(
         session,
-        lead_id=2,
-        campaign_id=1,
+        lead_id=lead2.id,
+        campaign_id=campaign.id,
         inbox_id=inbox.id,
         sent_at=yesterday,
     )
@@ -48,7 +52,9 @@ async def test_get_single_inbox_returns_sent_today(session):
     inbox = Inbox(email="bar@example.com")
     session.add(inbox)
     await session.flush()
-    await make_email_log(session, lead_id=3, campaign_id=1, inbox_id=inbox.id)
+    campaign = await make_campaign(session)
+    lead = await make_lead(session)
+    await make_email_log(session, lead_id=lead.id, campaign_id=campaign.id, inbox_id=inbox.id)
     await session.flush()
 
     # invoke the router function directly instead of an HTTP call

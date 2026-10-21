@@ -13,7 +13,7 @@ def local_mode(monkeypatch):
 
 
 async def account(db, limit=5):
-    inbox = Inbox(email='sender@local.test', provider='smtp', max_emails_per_day=limit)
+    inbox = Inbox(email='sender@local.test', provider='smtp', max_emails_per_day=limit, wait_minutes_between=0)
     db.add(inbox)
     await db.commit()
     return inbox

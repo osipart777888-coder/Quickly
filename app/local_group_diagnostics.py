@@ -112,6 +112,10 @@ async def dispatch_run(run_id):
         control = await db.get(SendControl,1,populate_existing=True)
         if not plan or not plan.enabled or not in_window(plan) or (control and control.emergency_stopped):
             return
+        from app.local_send import sender_ready
+        sender = await db.get(Inbox,run.sender_id,populate_existing=True)
+        if sender and not await sender_ready(db,sender):
+            return
         claimed = await db.scalar(update(DiagnosticRun).where(DiagnosticRun.id == run_id,DiagnosticRun.status == 'queued')
             .values(status='dispatching',started_at=utcnow()).returning(DiagnosticRun.id))
         await db.commit()
@@ -127,7 +131,7 @@ async def dispatch_run(run_id):
 
 
 async def poll_run(run_id):
-    from app.local_diagnostics import check_receipt, send_diagnostic_reply
+    from app.local_diagnostics import check_receipt, send_diagnostic_reply, DiagnosticDeferred
     async with AsyncSessionLocal() as db:
         run = await db.get(DiagnosticRun,run_id)
         if not run:
@@ -150,6 +154,10 @@ async def poll_run(run_id):
         if run.reply_message_id:
             await check_receipt(db,run,reply=True)
         elif plan and plan.mode == 'group' and plan.auto_reply and run.status == 'received' and in_window(plan):
+            from app.local_send import sender_ready
+            sender = await db.get(Inbox,run.recipient_id,populate_existing=True)
+            if sender and not await sender_ready(db,sender):
+                return
             # Persist the reply claim first; failures, quota blocks and crashes are visible,
             # never silently retried or moved to a different sender.
             claim = await db.scalar(update(DiagnosticRun).where(DiagnosticRun.id == run.id,
@@ -159,6 +167,9 @@ async def poll_run(run_id):
                 try:
                     await send_diagnostic_reply(db,run,allow_claimed=True)
                     run.status = 'reply_sent'
+                except DiagnosticDeferred:
+                    run.status = 'received'
+                    run.started_at = None
                 except ValueError as exc:
                     run.status = 'reply_stopped'
                     run.error = str(exc)[:2000]
@@ -189,8 +200,11 @@ async def run_group_jobs():
             DiagnosticRun.started_at < now-timedelta(minutes=10)).values(status='uncertain',
                 error='Обработка прервалась. Проверьте исходящие; автоматического повтора не будет.'))
         await db.commit()
-        plan_ids = (await db.execute(select(DiagnosticPlan.id).where(DiagnosticPlan.enabled == True,
-            DiagnosticPlan.next_run_at <= now).order_by(DiagnosticPlan.next_run_at,DiagnosticPlan.id).limit(20))).scalars().all()
+        enabled_plans = (await db.execute(select(DiagnosticPlan).where(DiagnosticPlan.enabled == True)
+            .order_by(DiagnosticPlan.next_run_at,DiagnosticPlan.id))).scalars().all()
+        open_plans = [p for p in enabled_plans if in_window(p,now)]
+        open_ids = [p.id for p in open_plans]
+        plan_ids = [p.id for p in open_plans if p.next_run_at and p.next_run_at <= now][:20]
         for plan_id in plan_ids:
             # A rejected plan rolls back its transaction. Reload the next plan
             # explicitly rather than touching objects expired by that rollback.
@@ -212,10 +226,14 @@ async def run_group_jobs():
                         await start_diagnostic(db,plan.sender_id,plan.recipient_id,plan)
                 except ValueError:
                     await db.rollback()
-        queued = (await db.execute(select(DiagnosticRun.id,DiagnosticPlan).join(DiagnosticPlan)
-            .where(DiagnosticRun.status == 'queued',DiagnosticPlan.enabled == True)
-            .order_by(DiagnosticRun.created_at,DiagnosticRun.id).limit(2000))).all()
-        ids = [rid for rid,plan in queued if in_window(plan)][:DISPATCH_PER_TICK]
+        queued = (await db.execute(select(DiagnosticRun.id,DiagnosticRun.sender_id)
+            .where(DiagnosticRun.status == 'queued',DiagnosticRun.plan_id.in_(open_ids))
+            .order_by(DiagnosticRun.created_at,DiagnosticRun.id))).all()
+        # Waiting senders do not occupy all 20 dispatch positions.
+        senders = {i.id:i for i in (await db.execute(select(Inbox).where(Inbox.id.in_({iid for _,iid in queued})))).scalars().all()}
+        from app.local_send import ready_sender_ids
+        ready = await ready_sender_ids(db,list(senders.values()),now=now)
+        ids = [rid for rid,iid in queued if iid in ready][:DISPATCH_PER_TICK]
     await bounded(ids,dispatch_run)
     async with AsyncSessionLocal() as db:
         pending = (await db.execute(select(DiagnosticRun.id).outerjoin(DiagnosticPlan).where(

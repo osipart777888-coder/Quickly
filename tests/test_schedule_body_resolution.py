@@ -552,7 +552,8 @@ async def test_assign_variants_no_variants(session):
     seq = await make_sequence(session, campaign.id)
     slot = await make_queue_slot(session, cl.id, inbox.id)
     await make_campaign_inbox(session, campaign.id, inbox.id)
-    slot.variant_id = 999  # pre-set, should be cleared
+    disabled = await make_variant(session,seq.id,enabled=False)
+    slot.variant_id = disabled.id  # Valid FK, but no enabled variant remains.
     await session.flush()
 
     await _assign_variants_to_slots(session)

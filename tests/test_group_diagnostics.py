@@ -22,7 +22,7 @@ async def make_group(db,count=3,**settings):
     boxes=[]
     offset=await db.scalar(select(func.count(Inbox.id))) or 0
     for n in range(count):
-        box=Inbox(email=f'owner-{offset+n}@local.test',provider='smtp',max_emails_per_day=5)
+        box=Inbox(email=f'owner-{offset+n}@local.test',provider='smtp',max_emails_per_day=5,wait_minutes_between=0)
         db.add(box);await db.flush();boxes.append(box)
         db.add(SmtpAccount(inbox_id=box.id,smtp_host='smtp.example.com',smtp_username=box.email,smtp_password='local-test-only',
             imap_host='imap.example.com',imap_username=box.email,imap_password='local-test-only'))

@@ -24,6 +24,12 @@
 
 ---
 
+## Quickly на этом Mac
+
+[Пошаговая инструкция на русском](docs/macos/ПОШАГОВО.md) · [Техническое руководство](docs/macos/РУКОВОДСТВО.md) · [Аудит и исправления 21.10.2026](docs/macos/AUDIT-2026-10-21.md) · [Результаты проверок](docs/macos/TEST-RESULTS.md).
+
+Запуск: `~/Applications/Quickly.app`, адрес: http://localhost:8765.
+
 ## Screenshots
 
 <p align="center">

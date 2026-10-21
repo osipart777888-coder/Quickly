@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.maintenance import background_work
+
 import asyncio
 import base64
 import hashlib
@@ -3309,6 +3311,7 @@ async def sync_all_inboxes(reason: str = "scheduled") -> int:
     return synced
 
 
+@background_work
 async def run_unibox_sync_job() -> None:
     count = await sync_all_inboxes(reason="scheduled")
     log.info("Periodic unibox sync finished: synced=%s", count)

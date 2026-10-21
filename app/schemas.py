@@ -162,6 +162,7 @@ class InboxResponse(BaseModel):
     effective_max_per_day: int = 0  # computed; 0 means use max_emails_per_day directly
     # how many emails have been sent from this inbox **today** (UTC)
     sent_today: int = 0
+    attempts_today: int = 0
     # how many future queue slots are pending on this inbox right now
     pending_leads: int = 0
     # Real health for SMTP inboxes (ok/failing/unknown); None for OAuth providers,

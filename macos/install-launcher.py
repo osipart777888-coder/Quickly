@@ -4,6 +4,9 @@ import plistlib
 import subprocess
 from pathlib import Path
 root=Path(__file__).resolve().parent.parent
+service=Path.home()/'Library/Application Support/Quickly/service'
+if not (service/'macos/quickly').is_file():
+    subprocess.run(['python3',str(root/'macos/install-autostart.py')],check=True)
 apps=Path.home()/'Applications'
 apps.mkdir(exist_ok=True)
 app=apps/'Quickly.app'
@@ -35,9 +38,9 @@ on error errorMessage
 end try
 end run'''
 # AppleScript string literals contain quoted POSIX paths produced at runtime.
-runner=str(root/'macos/quickly').replace('\\','\\\\').replace('"','\\"')
+runner=str(service/'macos/quickly').replace('\\','\\\\').replace('"','\\"')
 log=str(Path.home()/'Library/Application Support/Quickly/logs/launcher.log').replace('"','\\"')
-restorer=str(root/'macos/restore.py').replace('\\','\\\\').replace(chr(34),'\\'+chr(34))
+restorer=str(service/'macos/restore.py').replace('\\','\\\\').replace(chr(34),'\\'+chr(34))
 source=source.replace('RESTORER','quoted form of '+chr(34)+restorer+chr(34))
 source=source.replace('RUNNER','quoted form of "'+runner+'"').replace('LOGFILE','quoted form of "'+log+'"')
 subprocess.run(['osacompile','-o',str(app),'-'],input=source,text=True,check=True)

@@ -1580,7 +1580,7 @@ export default function Inboxes() {
           <div className="flex-1 min-w-0 space-y-2">
             {inboxes.map(inbox => {
               const isSelected = selectedInbox?.id === inbox.id;
-              const sentToday = inbox.sent_today || 0;
+              const sentToday = inbox.attempts_today ?? inbox.sent_today ?? 0;
               const maxToday = inbox.effective_max_per_day || inbox.max_emails_per_day;
               const warmupActive = inbox.ramp_up_enabled && inbox.effective_max_per_day < inbox.max_emails_per_day;
               const avatarLetter = (inbox.email || inbox.display_name || 'I')[0].toUpperCase();
@@ -1618,7 +1618,7 @@ export default function Inboxes() {
                       )}
                       <span className="text-xs text-gray-500">
                         <span className="font-semibold text-gray-800">{sentToday}</span>
-                        <span className="text-gray-400"> / {maxToday} sent</span>
+                        <span className="text-gray-400"> / {maxToday} attempts</span>
                       </span>
                       {inbox.paused
                         ? <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium">Paused</span>
@@ -2006,18 +2006,19 @@ export default function Inboxes() {
                     {/* Sent today */}
                     <div>
                       <div className="flex justify-between items-center mb-1.5">
-                        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Today</span>
+                        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Attempts today</span>
                         <span className="text-sm font-semibold text-gray-900">
-                          {selectedInbox.sent_today || 0}
+                          {selectedInbox.attempts_today ?? selectedInbox.sent_today ?? 0}
                           <span className="text-gray-400 font-normal"> / {selectedInbox.effective_max_per_day || selectedInbox.max_emails_per_day}</span>
                         </span>
                       </div>
                       <div className="w-full bg-gray-100 rounded-full h-1.5">
                         <div
                           className="bg-blue-500 h-1.5 rounded-full transition-all"
-                          style={{ width: `${Math.min(100, ((selectedInbox.sent_today || 0) / (selectedInbox.effective_max_per_day || selectedInbox.max_emails_per_day || 1)) * 100)}%` }}
+                          style={{ width: `${Math.min(100, ((selectedInbox.attempts_today ?? selectedInbox.sent_today ?? 0) / (selectedInbox.effective_max_per_day || selectedInbox.max_emails_per_day || 1)) * 100)}%` }}
                         />
                       </div>
+                      <p className="mt-2 text-xs text-gray-500">Accepted by server today: {selectedInbox.sent_today || 0}</p>
                     </div>
 
                     <hr className="border-gray-100" />

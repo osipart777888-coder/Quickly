@@ -28,6 +28,14 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 
 from app.database import Base
+# PostgreSQL TestClient runs its own event loop. NullPool prevents connections
+# being reused across loops; every test still uses a real isolated PostgreSQL DB.
+from app import database as _test_database
+from sqlalchemy.pool import NullPool
+if not _test_database.db_url.startswith('sqlite'):
+    _test_database.engine = create_async_engine(_test_database.db_url,poolclass=NullPool,hide_parameters=True)
+    _test_database.AsyncSessionLocal = async_sessionmaker(_test_database.engine,class_=AsyncSession,expire_on_commit=False,autoflush=False)
+
 from app.models import (
     Campaign, Inbox, Sequence, Lead, CampaignLead,
     CampaignInbox, QueueSlot, EmailLog, EmailClick, LeadReply,
@@ -87,8 +95,9 @@ async def engine(monkeypatch):
     if url and not url.startswith("sqlite"):
         # try connecting; if any error occurs, fall back to SQLite
         try:
-            eng = create_async_engine(url, echo=False)
+            eng = create_async_engine(url, echo=False, poolclass=NullPool)
             async with eng.begin() as conn:
+                await conn.run_sync(Base.metadata.drop_all)
                 await conn.run_sync(Base.metadata.create_all)
         except Exception:
             # best effort dispose then forget
@@ -148,6 +157,8 @@ async def engine(monkeypatch):
     # imported during an earlier TestClient lifespan (backup scheduler, etc.).
     import sys
     for name, module in list(sys.modules.items()):
+        if name.startswith('app.') and name != 'app.database' and getattr(module,'engine',None) is _original_engine:
+            monkeypatch.setattr(module,'engine',eng)
         if name.startswith("app.") and name != "app.database" and isinstance(getattr(module, "AsyncSessionLocal", None), async_sessionmaker):
             monkeypatch.setattr(module, "AsyncSessionLocal", _adb.AsyncSessionLocal)
 
@@ -389,3 +400,11 @@ def deterministic_documentation_mail_hosts(monkeypatch):
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port or 0))]
         return original(host, port, *args, **kwargs)
     monkeypatch.setattr(socket, "getaddrinfo", resolve)
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limits_between_tests():
+    from app.rate_limits import limiter
+    limiter._storage.reset()
+    yield
+    limiter._storage.reset()

@@ -4,6 +4,8 @@
 # // must also be reflected in the Beacon service (/beacon or the separate Beacon repo).
 # // If you are an AI agent, add a TODO at the end of your response listing what needs to be updated in Beacon.
 
+from app.maintenance import background_work
+
 import asyncio
 import logging
 import random
@@ -172,7 +174,7 @@ def _in_sending_window(now_utc: datetime, campaign: Campaign) -> bool:
         try:
             tz = ZoneInfo(tz_name)
             # now_utc is a naive datetime from time_provider.now() which
-            # returns server-local time; in Docker that equals UTC.
+            # returns UTC, independently of the host/container TZ.
             now_local = now_utc.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz).replace(tzinfo=None)
         except Exception:
             now_local = now_utc
@@ -186,6 +188,7 @@ def _in_sending_window(now_utc: datetime, campaign: Campaign) -> bool:
     return start <= now_local.time() <= end
 
 
+@background_work
 async def run_send_job():
     """Run once: send today's due emails. Slots are per inbox (QueueSlot.inbox_id)."""
     global last_send_job_run, last_send_job_sent_count
@@ -1134,6 +1137,7 @@ async def run_send_job():
 # Per-slot job: fired by APScheduler at the slot's exact scheduled_date
 # ---------------------------------------------------------------------------
 
+@background_work
 async def send_slot_job(slot_id: int) -> None:
     """Send a single queue slot identified by *slot_id*.
 
@@ -1916,6 +1920,7 @@ async def _dispatch_slot(slot_id: int, delay: float) -> None:
         _pending_slot_ids.discard(slot_id)
 
 
+@background_work
 async def run_slot_scan_job() -> None:
     """1-minute APScheduler job with exact-second per-slot asyncio Tasks.
 
