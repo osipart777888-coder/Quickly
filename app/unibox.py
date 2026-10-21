@@ -1,6 +1,9 @@
 """Unibox backend services: DB queries, Gmail sync, Office 365 sync, and realtime signaling."""
 
 from __future__ import annotations
+from app.mail_io import bounded_io, await_thread,read_limit_error
+from app.maintenance import create_background_task
+
 
 from app.maintenance import background_work
 
@@ -87,10 +90,11 @@ RECENT_RECOVERY_MAX_MESSAGES = _parse_message_limit_from_env(
 class GmailAPIError(RuntimeError):
     """Raised when Gmail API returns an error."""
 
-    def __init__(self, status_code: int, body: str):
+    def __init__(self, status_code: int, body: str, retry_after: str | None = None):
         super().__init__(f"Gmail API error {status_code}: {body}")
         self.status_code = status_code
         self.body = body
+        self.retry_after = retry_after
 
 
 class UniboxEventBroker:
@@ -404,7 +408,7 @@ def _gmail_request_json(
             body_text = exc.read().decode("utf-8")
         except Exception:
             body_text = str(exc)
-        raise GmailAPIError(exc.code, body_text) from exc
+        raise GmailAPIError(exc.code, body_text, exc.headers.get('Retry-After') if exc.headers else None) from exc
     except Exception as exc:
         raise GmailAPIError(0, str(exc)) from exc
 
@@ -598,11 +602,12 @@ async def _get_or_create_sync_state(db: AsyncSession, inbox_id: int) -> GmailSyn
     return state
 
 
+@bounded_io(reading=True)
 async def _ensure_access_token(db: AsyncSession, account: GmailAccount) -> str:
     now_utc = time_provider.utcnow()
     if account.token_expiry and account.token_expiry <= (now_utc + timedelta(minutes=5)):
         client_id, client_secret = await get_google_oauth_credentials(db)
-        refreshed = refresh_access_token(account, client_id, client_secret)
+        refreshed = await await_thread(refresh_access_token,account,client_id,client_secret)
         if not refreshed:
             # notify webhook; callers will usually catch the exception
             try:
@@ -623,14 +628,16 @@ async def _ensure_access_token(db: AsyncSession, account: GmailAccount) -> str:
     return account.access_token
 
 
+@bounded_io(reading=True)
 async def _refresh_gmail_token(db: AsyncSession, account: GmailAccount) -> bool:
     client_id, client_secret = await get_google_oauth_credentials(db)
-    refreshed = refresh_access_token(account, client_id, client_secret)
+    refreshed = await await_thread(refresh_access_token,account,client_id,client_secret)
     if refreshed:
         await db.flush()
     return bool(refreshed)
 
 
+@bounded_io(reading=True)
 async def _gmail_call_with_refresh(
     db: AsyncSession,
     account: GmailAccount,
@@ -640,12 +647,12 @@ async def _gmail_call_with_refresh(
 ):
     """Call a Gmail API helper, refreshing once on auth errors."""
     try:
-        return await asyncio.to_thread(func, account.access_token, *args, **kwargs)
+        return await await_thread(func, account.access_token, *args, **kwargs)
     except GmailAPIError as exc:
-        if exc.status_code in (401, 403):
+        if exc.status_code in (401, 403) and not read_limit_error(exc):
             refreshed = await _refresh_gmail_token(db, account)
             if refreshed:
-                return await asyncio.to_thread(func, account.access_token, *args, **kwargs)
+                return await await_thread(func, account.access_token, *args, **kwargs)
             try:
                 await maybe_fire_email_event(
                     db,
@@ -1046,7 +1053,7 @@ async def _upsert_message_from_gmail(
                 "timestamp": time_provider.utcnow().isoformat() + "Z",
             }
             # SSE notification fires immediately (in-memory, no commit needed).
-            asyncio.create_task(
+            create_background_task(
                 unibox_events.publish(
                     {
                         "type": "unibox.notification",
@@ -1060,11 +1067,11 @@ async def _upsert_message_from_gmail(
                 )
             )
             # Webhook fires in the background after current transaction commits.
-            asyncio.create_task(_fire_lead_reply_webhook_bg(webhook_data))
+            create_background_task(_fire_lead_reply_webhook_bg(webhook_data))
             # AI classification fires in a separate background task.
             # It uses the body of the reply message for classification.
             reply_body = body_plain or body_html or snippet or ""
-            asyncio.create_task(
+            create_background_task(
                 _classify_and_notify_bg(
                     lead_id=lead.id,
                     lead_email=reply_from_addr,
@@ -1810,7 +1817,7 @@ async def _process_smtp_inbound_message(
             "message_id": message_pk,
             "timestamp": time_provider.utcnow().isoformat() + "Z",
         }
-        asyncio.create_task(
+        create_background_task(
             unibox_events.publish(
                 {
                     "type": "unibox.notification",
@@ -1823,9 +1830,9 @@ async def _process_smtp_inbound_message(
                 }
             )
         )
-        asyncio.create_task(_fire_lead_reply_webhook_bg(webhook_data))
+        create_background_task(_fire_lead_reply_webhook_bg(webhook_data))
         reply_body = parsed.get("body_plain") or parsed.get("body_html") or parsed.get("snippet") or ""
-        asyncio.create_task(
+        create_background_task(
             _classify_and_notify_bg(
                 lead_id=lead.id,
                 lead_email=from_addr or lead.email,
@@ -1857,6 +1864,7 @@ async def _process_smtp_inbound_message(
     return row, True, (inbox.id, thread_key)
 
 
+@bounded_io(reading=True)
 async def _sync_inbox_smtp(db: AsyncSession, inbox, reason: str = "") -> set[tuple[int, str]]:
     """Poll an SMTP inbox's IMAP INBOX for new messages (reply + bounce detection)."""
     from app.smtp_utils import normalise_message_id as _norm_mid
@@ -1879,7 +1887,7 @@ async def _sync_inbox_smtp(db: AsyncSession, inbox, reason: str = "") -> set[tup
         await db.flush()
 
     try:
-        new_validity, fetched = await asyncio.to_thread(
+        new_validity, fetched = await await_thread(
             _fetch_smtp_new_messages, acct, state.uidvalidity, state.last_uid or 0
         )
     except Exception as exc:
@@ -2368,7 +2376,7 @@ async def mark_thread_read(
                 smtp_thread.unread_lead_reply = False
                 await db.flush()
                 new_count = await get_notification_count(db)
-                asyncio.create_task(
+                create_background_task(
                     unibox_events.publish(
                         {
                             "type": "unibox.notification.count",
@@ -2382,7 +2390,7 @@ async def mark_thread_read(
             o365_thread.unread_lead_reply = False
             await db.flush()
             new_count = await get_notification_count(db)
-            asyncio.create_task(
+            create_background_task(
                 unibox_events.publish(
                     {
                         "type": "unibox.notification.count",
@@ -2398,7 +2406,7 @@ async def mark_thread_read(
         await db.flush()
         # Broadcast updated notification count via SSE.
         new_count = await get_notification_count(db)
-        asyncio.create_task(
+        create_background_task(
             unibox_events.publish(
                 {
                     "type": "unibox.notification.count",
@@ -2651,6 +2659,7 @@ async def _thread_requires_body_hydration(db: AsyncSession, *, inbox_id: int, th
     return missing_messages > 0
 
 
+@bounded_io(reading=True)
 async def _hydrate_thread_from_gmail(
     db: AsyncSession,
     *,
@@ -2833,9 +2842,10 @@ async def queue_thread_hydration_for_inbox(
             reason=reason,
         )
 
-    asyncio.create_task(_runner())
+    create_background_task(_runner())
 
 
+@bounded_io(reading=True)
 async def _sync_inbox(
     db: AsyncSession,
     inbox: Inbox,
@@ -3321,14 +3331,14 @@ async def queue_sync_for_inbox(inbox_id: int, reason: str = "push") -> None:
     async def _runner() -> None:
         await sync_single_inbox(inbox_id, reason=reason)
 
-    asyncio.create_task(_runner())
+    create_background_task(_runner())
 
 
 async def queue_sync_for_all_inboxes(reason: str = "startup") -> None:
     async def _runner() -> None:
         await sync_all_inboxes(reason=reason)
 
-    asyncio.create_task(_runner())
+    create_background_task(_runner())
 
 
 async def queue_backfill_for_inbox(
@@ -3340,7 +3350,7 @@ async def queue_backfill_for_inbox(
     async def _runner() -> None:
         await backfill_single_inbox(inbox_id, window_days=window_days, reason=reason)
 
-    asyncio.create_task(_runner())
+    create_background_task(_runner())
 
 
 async def queue_backfill_for_all_inboxes(
@@ -3355,7 +3365,7 @@ async def queue_backfill_for_all_inboxes(
         for inbox_id in inbox_ids:
             await backfill_single_inbox(inbox_id, window_days=window_days, reason=reason)
 
-    asyncio.create_task(_runner())
+    create_background_task(_runner())
 
 
 # ---------------------------------------------------------------------------
@@ -3400,7 +3410,7 @@ def _graph_request_json(
             body_text = exc.read().decode("utf-8")
         except Exception:
             body_text = str(exc)
-        raise GmailAPIError(exc.code, body_text) from exc
+        raise GmailAPIError(exc.code, body_text, exc.headers.get('Retry-After') if exc.headers else None) from exc
     except Exception as exc:
         raise GmailAPIError(0, str(exc)) from exc
 
@@ -3469,7 +3479,7 @@ def _graph_list_messages(
                 body_text = exc.read().decode("utf-8")
             except Exception:
                 pass
-            raise GmailAPIError(exc.code, body_text) from exc
+            raise GmailAPIError(exc.code, body_text, exc.headers.get('Retry-After') if exc.headers else None) from exc
 
         for msg in data.get("value", []):
             if isinstance(msg, dict):
@@ -3484,12 +3494,13 @@ def _graph_list_messages(
     return messages, new_delta_link
 
 
+@bounded_io(reading=True)
 async def _ensure_o365_access_token(db: AsyncSession, account: Office365Account) -> str:
     """Ensure the Office 365 access token is fresh, refreshing if needed."""
     now_utc = time_provider.utcnow()
     if account.token_expiry and account.token_expiry <= (now_utc + timedelta(minutes=5)):
         client_id, client_secret, tenant_id = await get_office365_oauth_credentials(db)
-        refreshed = refresh_office365_token(account, client_id, client_secret, tenant_id)
+        refreshed = await await_thread(refresh_office365_token,account,client_id,client_secret,tenant_id)
         if not refreshed:
             try:
                 await maybe_fire_email_event(
@@ -3509,14 +3520,16 @@ async def _ensure_o365_access_token(db: AsyncSession, account: Office365Account)
     return account.access_token
 
 
+@bounded_io(reading=True)
 async def _refresh_o365_token(db: AsyncSession, account: Office365Account) -> bool:
     client_id, client_secret, tenant_id = await get_office365_oauth_credentials(db)
-    refreshed = refresh_office365_token(account, client_id, client_secret, tenant_id)
+    refreshed = await await_thread(refresh_office365_token,account,client_id,client_secret,tenant_id)
     if refreshed:
         await db.flush()
     return bool(refreshed)
 
 
+@bounded_io(reading=True)
 async def _o365_call_with_refresh(
     db: AsyncSession,
     account: Office365Account,
@@ -3526,12 +3539,12 @@ async def _o365_call_with_refresh(
 ):
     """Call an Office 365 Graph helper, refreshing once on auth errors."""
     try:
-        return await asyncio.to_thread(func, account.access_token, *args, **kwargs)
+        return await await_thread(func, account.access_token, *args, **kwargs)
     except GmailAPIError as exc:
-        if exc.status_code in (401, 403):
+        if exc.status_code in (401, 403) and not read_limit_error(exc):
             refreshed = await _refresh_o365_token(db, account)
             if refreshed:
-                return await asyncio.to_thread(func, account.access_token, *args, **kwargs)
+                return await await_thread(func, account.access_token, *args, **kwargs)
             try:
                 await maybe_fire_email_event(
                     db,
@@ -3687,6 +3700,7 @@ async def _upsert_o365_message(
     return row, True
 
 
+@bounded_io(reading=True)
 async def _sync_inbox_office365(
     db: AsyncSession,
     inbox: Inbox,

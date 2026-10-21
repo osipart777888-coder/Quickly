@@ -2,6 +2,10 @@ import {useMemo,useState} from 'react';
 import {api} from '../../api';
 import {translate} from '../../i18n';
 
+export function ObservationSettings({hours=48,seconds=300}){
+  return <><label>Observation period<select name="observation_hours" defaultValue={hours} className="block rounded border"><option value="24">24 hours</option><option value="48">48 hours</option><option value="72">72 hours</option></select></label><label>Receipt check interval<select name="poll_seconds" defaultValue={seconds} className="block rounded border">{[60,300,600,900,1800,3600].map(n=><option key={n} value={n}>{n/60} min</option>)}</select></label></>;
+}
+
 export default function DiagnosticGroups({accounts,onChanged}){
   const [selected,setSelected]=useState(new Set()),[search,setSearch]=useState(''),[provider,setProvider]=useState('');
   const [preview,setPreview]=useState(null),[message,setMessage]=useState(''),[busy,setBusy]=useState(false);
@@ -12,7 +16,7 @@ export default function DiagnosticGroups({accounts,onChanged}){
   async function inspect(){setBusy(true);setMessage('');try{setPreview(await api.post('/local/diagnostics/group-preview',{inbox_ids:ids}));}catch(e){setMessage(e.message);}finally{setBusy(false);}}
   async function save(e){e.preventDefault();const form=e.currentTarget;const f=new FormData(form);setBusy(true);setMessage('');try{
     await api.post('/local/diagnostics/plans',{mode:'group',name:f.get('name'),inbox_ids:ids,owned_accounts_confirmed:f.has('owned'),enabled:false,
-      interval_minutes:Number(f.get('interval')),per_account_daily_limit:checks,max_messages_per_day:Number(f.get('budget')),auto_reply:autoReply,
+      interval_minutes:Number(f.get('interval')),per_account_daily_limit:checks,max_messages_per_day:Number(f.get('budget')),auto_reply:autoReply,observation_hours:Number(f.get('observation_hours')),poll_interval_seconds:Number(f.get('poll_seconds')),
       sending_days:f.getAll('day').map(Number),hours_start:f.get('start'),hours_end:f.get('end')});
     setMessage(translate('Group saved in paused state. Enable its schedule below to start checks.'));await onChanged();
   }catch(err){setMessage(err.message);}finally{setBusy(false);}}
@@ -26,7 +30,7 @@ export default function DiagnosticGroups({accounts,onChanged}){
     <form onSubmit={save} className="space-y-4"><div className="grid gap-3 md:grid-cols-2"><label>Group name<input name="name" required defaultValue={translate('My mailbox group')} className="block rounded border w-full"/></label><label>Repeat full cycle, minutes<input name="interval" type="number" defaultValue="1440" min="15" max="43200" required className="block rounded border w-full"/></label>
       <label>Outgoing checks per mailbox per day<input type="number" value={checks} onChange={e=>setChecks(Number(e.target.value))} min="1" max="100" required className="block rounded border w-full"/></label>
       <label>Total diagnostic messages per group per day<input name="budget" type="number" value={budget||Math.max(1,ids.length*checks*(autoReply?2:1))} onChange={e=>setBudget(e.target.value)} min="1" max="100000" required className="block rounded border w-full"/></label>
-      <label>Start time (Moscow)<input name="start" type="time" defaultValue="09:00" required className="block rounded border w-full"/></label><label>End time (Moscow)<input name="end" type="time" defaultValue="18:00" required className="block rounded border w-full"/></label></div>
+      <ObservationSettings/><label>Start time (Moscow)<input name="start" type="time" defaultValue="09:00" required className="block rounded border w-full"/></label><label>End time (Moscow)<input name="end" type="time" defaultValue="18:00" required className="block rounded border w-full"/></label></div>
       <fieldset><legend>Schedule days</legend><div className="flex flex-wrap gap-3 mt-2">{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((d,i)=><label key={d}><input name="day" type="checkbox" value={i} defaultChecked={i<5} className="rounded mr-1"/>{d}</label>)}</div></fieldset>
       <label className="flex gap-2 items-start text-sm"><input type="checkbox" checked={autoReply} onChange={e=>setAutoReply(e.target.checked)} className="mt-1 rounded"/><span>Automatically send a labelled diagnostic reply after confirmed receipt</span></label>
       <p className="text-xs text-gray-600">Replies use the group message budget and the replying mailbox daily quota. The outgoing-check limit counts initial probes only. Emergency stop, pauses and normal mailbox limits apply to every message.</p>
@@ -39,7 +43,7 @@ export default function DiagnosticGroups({accounts,onChanged}){
 export function GroupSchedule({plan,onAction,busy}){
   const c=plan.cycle_counts||{};
   const [editing,setEditing]=useState(false);
-  function save(e){e.preventDefault();const f=new FormData(e.currentTarget);onAction(async()=>{await api.put(`/local/diagnostics/plans/${plan.id}/settings`,{name:f.get('name'),interval_minutes:Number(f.get('interval')),per_account_daily_limit:Number(f.get('checks')),max_messages_per_day:Number(f.get('budget')),auto_reply:f.has('autoReply'),sending_days:f.getAll('day').map(Number),hours_start:f.get('start'),hours_end:f.get('end')});setEditing(false);});}
+  function save(e){e.preventDefault();const f=new FormData(e.currentTarget);onAction(async()=>{await api.put(`/local/diagnostics/plans/${plan.id}/settings`,{name:f.get('name'),interval_minutes:Number(f.get('interval')),per_account_daily_limit:Number(f.get('checks')),max_messages_per_day:Number(f.get('budget')),auto_reply:f.has('autoReply'),observation_hours:Number(f.get('observation_hours')),poll_interval_seconds:Number(f.get('poll_seconds')),sending_days:f.getAll('day').map(Number),hours_start:f.get('start'),hours_end:f.get('end')});setEditing(false);});}
   return <div className="border-t py-4 space-y-3"><div className="flex flex-wrap justify-between gap-2"><div><h3 className="font-semibold">{plan.name}</h3><p className="text-sm">Group accounts: {plan.inbox_ids.length} · {plan.enabled?'Enabled':'Paused'}</p><p className="text-xs text-gray-500">{plan.interval_minutes} min · {plan.hours_start}–{plan.hours_end} MSK</p></div><button disabled={busy} className="rounded border px-3" onClick={()=>onAction(()=>api.put(`/local/diagnostics/plans/${plan.id}`,{enabled:!plan.enabled}))}>{plan.enabled?'Stop schedule':'Enable schedule'}</button></div>
     <p className="text-sm">Outgoing checks per mailbox per day: {plan.per_account_daily_limit} · Diagnostic replies: {plan.auto_reply?'Enabled':'Disabled'}</p>
     <button type="button" disabled={busy} className="rounded border px-3 py-2 text-sm" onClick={()=>setEditing(!editing)}>{editing?'Cancel editing':'Edit group settings'}</button>
@@ -50,12 +54,14 @@ export function GroupSchedule({plan,onAction,busy}){
         <label>Repeat full cycle, minutes<input name="interval" type="number" min="15" max="43200" required defaultValue={plan.interval_minutes} className="block w-full rounded border"/></label>
         <label>Outgoing checks per mailbox per day<input name="checks" type="number" min="1" max="100" required defaultValue={plan.per_account_daily_limit} className="block w-full rounded border"/></label>
         <label>Total diagnostic messages per group per day<input name="budget" type="number" min="1" max="100000" required defaultValue={plan.max_messages_per_day} className="block w-full rounded border"/></label>
-        <label>Start time (Moscow)<input name="start" type="time" required defaultValue={plan.hours_start} className="block rounded border"/></label>
+        <ObservationSettings hours={plan.observation_hours} seconds={plan.poll_interval_seconds}/><label>Start time (Moscow)<input name="start" type="time" required defaultValue={plan.hours_start} className="block rounded border"/></label>
         <label>End time (Moscow)<input name="end" type="time" required defaultValue={plan.hours_end} className="block rounded border"/></label>
       </div><fieldset><legend>Schedule days</legend><div className="flex gap-3 flex-wrap">{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((day,i)=><label key={day}><input name="day" type="checkbox" value={i} defaultChecked={plan.sending_days.includes(i)}/>{day}</label>)}</div></fieldset>
       <label className="flex gap-2 text-sm"><input name="autoReply" type="checkbox" defaultChecked={plan.auto_reply}/>Automatically send a labelled diagnostic reply after confirmed receipt</label>
       <button disabled={busy} className="rounded bg-blue-700 px-4 py-2 text-white">Save settings and pause group</button>
     </form>}
+    <div className="grid grid-cols-2 gap-2 text-sm">{Object.entries(plan.summary||{}).map(([key,value])=><p key={key}>{translate(({total:'Group accounts',available:'Available accounts',paused:'Paused accounts',queued:'Queued checks',accepted:'Accepted by server',received:'Receipt confirmed',unavailable:'Check unavailable',uncertain:'Unknown send result',expired:'Observation expired'})[key])}: {value}</p>)}</div>
+    <p className="text-xs">Next cycle: {plan.next_run_at?new Date(plan.next_run_at+'Z').toLocaleString():translate('No data')}</p>
     <p className="text-sm">Group budget used today: {plan.used_today} / {plan.max_messages_per_day}</p><div className="flex flex-wrap gap-2 text-xs">{Object.entries(c).map(([status,count])=><span className="rounded border px-2 py-1" key={status}>{translate(status)}: {count}</span>)}{!Object.keys(c).length&&<span>No queued cycle yet.</span>}</div>
     <p className="text-xs text-gray-600">Stopped schedules retain their queue. Resuming continues pending checks. A new cycle is not added while the previous cycle has pending checks.</p>
     <div className="flex flex-wrap gap-2"><button disabled={busy} className="rounded border px-3 py-2 text-sm" onClick={()=>onAction(()=>api.post(`/local/diagnostics/plans/${plan.id}/enqueue`,{}))}>Queue next cycle</button><button disabled={busy} className="rounded border px-3 py-2 text-sm" onClick={()=>onAction(()=>api.post(`/local/diagnostics/plans/${plan.id}/cancel-queue`,{}))}>Cancel pending checks</button></div>

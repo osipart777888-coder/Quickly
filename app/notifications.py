@@ -9,6 +9,7 @@ Rate limiting is per-user, per-hour (configurable).
 """
 from __future__ import annotations
 
+from app.mail_io import bounded_io,await_thread
 import asyncio
 import json
 import logging
@@ -279,6 +280,7 @@ def _send_via_microsoft(user: User, to: str, subject: str, body: str) -> bool:
         return False
 
 
+@bounded_io()
 async def _send_notification_for_user(
     db: AsyncSession,
     user: User,
@@ -307,10 +309,10 @@ async def _send_notification_for_user(
     # Refresh token if near expiry
     if user.notif_token_expiry and user.notif_token_expiry <= time_provider.utcnow() + timedelta(minutes=5):
         if user.oauth_provider == "google":
-            if not await asyncio.to_thread(_refresh_google_notif_token, user):
+            if not await await_thread(_refresh_google_notif_token, user):
                 return False
         elif user.oauth_provider == "microsoft":
-            if not await asyncio.to_thread(_refresh_microsoft_notif_token, user):
+            if not await await_thread(_refresh_microsoft_notif_token, user):
                 return False
         await db.flush()
 
@@ -327,9 +329,9 @@ async def _send_notification_for_user(
             return False
         return bool(await guarded_send(db, local_inbox, kind="notification", send=deliver, to_email=to))
     if user.oauth_provider == "google":
-        return await asyncio.to_thread(_send_via_gmail, user, to, subject, body)
+        return await await_thread(_send_via_gmail, user, to, subject, body)
     elif user.oauth_provider == "microsoft":
-        return await asyncio.to_thread(_send_via_microsoft, user, to, subject, body)
+        return await await_thread(_send_via_microsoft, user, to, subject, body)
     else:
         log.warning("User %s has unsupported OAuth provider '%s'", user.id, user.oauth_provider)
         return False

@@ -1,0 +1,7 @@
+{
+  "rows": 500,
+  "columns": 13,
+  "secret_columns": false,
+  "journal_dates_visible": true,
+  "group_policy_72h_600s_saved": true
+}

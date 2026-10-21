@@ -1,5 +1,6 @@
 """Leads API routes."""
 import asyncio
+from app.maintenance import create_background_task
 import csv
 import io
 import json
@@ -505,7 +506,7 @@ async def _finalize_lead_recovery(
     if verify:
         from app.routers.campaigns import _run_background_verification
 
-        asyncio.create_task(_run_background_verification(lead_ids))
+        create_background_task(_run_background_verification(lead_ids))
     else:
         await db.commit()
         from app.routers.schedule import enqueue_global_recalculate

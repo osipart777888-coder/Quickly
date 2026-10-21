@@ -1,0 +1,58 @@
+{
+  "passed": 10,
+  "failed": 0,
+  "skipped": 0,
+  "transport": "real MCP Streamable HTTP over loopback TCP",
+  "cases": [
+    {
+      "case": "read",
+      "bearer": false,
+      "result": "passed"
+    },
+    {
+      "case": "leads-read",
+      "bearer": false,
+      "result": "passed"
+    },
+    {
+      "case": "leads-write",
+      "bearer": false,
+      "result": "passed"
+    },
+    {
+      "case": "expired",
+      "bearer": false,
+      "result": "passed"
+    },
+    {
+      "case": "revoked",
+      "bearer": false,
+      "result": "passed"
+    },
+    {
+      "case": "read",
+      "bearer": true,
+      "result": "passed"
+    },
+    {
+      "case": "leads-read",
+      "bearer": true,
+      "result": "passed"
+    },
+    {
+      "case": "leads-write",
+      "bearer": true,
+      "result": "passed"
+    },
+    {
+      "case": "expired",
+      "bearer": true,
+      "result": "passed"
+    },
+    {
+      "case": "revoked",
+      "bearer": true,
+      "result": "passed"
+    }
+  ]
+}

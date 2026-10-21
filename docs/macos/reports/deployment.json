@@ -1,0 +1,79 @@
+{
+  "initial_revision2_update": {
+    "all_existing_business_values_preserved": true,
+    "before_sha256": "ac4b3414296b1b05896ca5d84d11e67779306ee1d46bf067d2acc54a39c1ead6",
+    "after_sha256": "ac4b3414296b1b05896ca5d84d11e67779306ee1d46bf067d2acc54a39c1ead6",
+    "tables_checked": 49,
+    "administrators": 1,
+    "accounts": 1,
+    "contacts": 0,
+    "campaigns": 0,
+    "mail_operations": 0,
+    "old_notifications_preserved": 6,
+    "additional_system_notifications": 3,
+    "additional_notification_types": [
+      "token_expired",
+      "token_expired",
+      "token_expired"
+    ],
+    "excluded_service_fields": {
+      "app_setting": [
+        "updated_at",
+        "global_recalc_finished_at (service progress)"
+      ]
+    },
+    "admin_login_status": 200,
+    "control": {
+      "emergency_stopped": true,
+      "campaigns_enabled": false,
+      "mail_concurrency": 4
+    },
+    "enabled_plans": 0,
+    "backup_verified": true,
+    "previous_image_retained": true,
+    "localhost_only": true,
+    "database_not_restarted": true
+  },
+  "final_image_refresh": {
+    "latest_backend_matches_source": true,
+    "backend_python_files": 84,
+    "all_existing_business_values_preserved": true,
+    "tables_checked": 50,
+    "accounts": 1,
+    "administrators": 1,
+    "contacts": 0,
+    "campaigns": 0,
+    "mail_operations": 0,
+    "old_notifications_preserved": 31,
+    "additional_system_notifications": 1,
+    "excluded_service_fields": {
+      "app_setting": [
+        "updated_at",
+        "global_recalc_finished_at (service progress)"
+      ]
+    },
+    "admin_login_status": 200,
+    "control": {
+      "emergency_stopped": true,
+      "campaigns_enabled": false,
+      "mail_concurrency": 4
+    },
+    "enabled_plans": 0,
+    "backup_verified": true,
+    "previous_image_retained": true,
+    "localhost_only": true,
+    "database_not_restarted": true
+  },
+  "macos_startup": {
+    "launch_agent_exit_code": 0,
+    "startup_runtime_outside_documents": true,
+    "launcher_signature_verified": true,
+    "plist_valid": true,
+    "production_database_not_restarted": true
+  },
+  "ui": {
+    "diagnostics_loaded": true,
+    "global_connection_limit": 4,
+    "emergency_stop_visible": true
+  }
+}

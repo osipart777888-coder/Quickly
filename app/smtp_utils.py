@@ -312,7 +312,7 @@ def smtp_timeout_seconds(default: float = 30.0) -> float:
         try:
             value = float(raw)
             if value > 0:
-                return value
+                return min(value,120.0)
         except (TypeError, ValueError):
             log.warning("Ignoring invalid SMTP_TIMEOUT_SECONDS=%r", raw)
     return default
@@ -322,16 +322,23 @@ def _smtp_connect(account, timeout: float = 15.0):
     """Return a connected+logged-in smtplib client for *account* (caller must quit)."""
     host = (account.smtp_host or "").strip()
     port = int(account.smtp_port or 587)
-    if account.smtp_use_ssl:
-        client = smtplib.SMTP_SSL(host, port, timeout=timeout, context=_verified_ssl_context())
-    else:
-        client = smtplib.SMTP(host, port, timeout=timeout)
-        if account.smtp_use_tls:
-            client.ehlo()
-            client.starttls(context=_verified_ssl_context())
-            client.ehlo()
-    client.login(account.smtp_username or "", account.smtp_password or "")
-    return client
+    client=None
+    try:
+        if account.smtp_use_ssl:
+            client = smtplib.SMTP_SSL(host, port, timeout=timeout, context=_verified_ssl_context())
+        else:
+            client = smtplib.SMTP(host, port, timeout=timeout)
+            if account.smtp_use_tls:
+                client.ehlo()
+                client.starttls(context=_verified_ssl_context())
+                client.ehlo()
+        client.login(account.smtp_username or "", account.smtp_password or "")
+        return client
+    except BaseException:
+        if client is not None:
+            try:client.close()
+            except Exception:pass
+        raise
 
 
 def test_smtp_connection(account, timeout: float = 15.0) -> SmtpTestResult:
@@ -364,19 +371,26 @@ def _imap_connect(account, timeout: float = 15.0):
     port = int(account.imap_port or 993)
     # Pass the timeout to the constructor so the TCP connect + TLS handshake
     # are bounded too (a black-holed host must not hang the sync worker).
-    if account.imap_use_ssl:
-        client = imaplib.IMAP4_SSL(host, port, ssl_context=_verified_ssl_context(), timeout=timeout)
-    else:
-        client = imaplib.IMAP4(host, port, timeout=timeout)
-    client.login(account.imap_username or "", account.imap_password or "")
-    typ, _ = client.select("INBOX", readonly=True)
-    if typ != "OK":
-        try:
-            client.logout()
-        except Exception:
-            pass
-        raise imaplib.IMAP4.error("Could not select INBOX")
-    return client
+    client=None
+    try:
+        if account.imap_use_ssl:
+            client = imaplib.IMAP4_SSL(host, port, ssl_context=_verified_ssl_context(), timeout=timeout)
+        else:
+            client = imaplib.IMAP4(host, port, timeout=timeout)
+        client.login(account.imap_username or "", account.imap_password or "")
+        typ, _ = client.select("INBOX", readonly=True)
+        if typ != "OK":
+            try:
+                client.logout()
+            except Exception:
+                pass
+            raise imaplib.IMAP4.error("Could not select INBOX")
+        return client
+    except BaseException:
+        if client is not None:
+            try:client.shutdown()
+            except Exception:pass
+        raise
 
 
 def test_imap_connection(account, timeout: float = 15.0) -> SmtpTestResult:

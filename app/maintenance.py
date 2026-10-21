@@ -7,6 +7,9 @@ from starlette.responses import JSONResponse
 _restoring = False
 _active = {}
 
+def is_restoring():
+    return _restoring
+
 
 @asynccontextmanager
 async def active_work():
@@ -72,3 +75,14 @@ async def exclusive_restore(timeout=120):
         _restoring = False
         if resume and scheduler.running:
             scheduler.resume()
+
+
+def create_background_task(coroutine):
+    """Register before scheduling, including sleeps and nested notification tasks."""
+    if _restoring:
+        coroutine.close()
+        return None
+    task=asyncio.create_task(coroutine)
+    _active[task]=_active.get(task,0)+1
+    task.add_done_callback(lambda done:_active.pop(done,None))
+    return task

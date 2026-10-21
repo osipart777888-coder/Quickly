@@ -670,7 +670,8 @@ def test_send_via_smtp_records_transient_failure(monkeypatch):
         to_email="lead@example.com", subject="Hi", body="Hello",
         from_email="me@mydomain.com", smtp_account=acct,
     )
-    assert res is None  # transient
+    # A numeric refusal is proof of rejection, rather than an unknown result.
+    assert isinstance(res,sender_mod.SendFailure) and res.error_type=='smtp_rejected'
     assert acct.last_send_error  # ...but now visible
     assert acct.last_send_at is not None
     assert smtp_failure_streak(99) == 1

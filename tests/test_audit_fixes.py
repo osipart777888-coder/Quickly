@@ -49,7 +49,12 @@ async def test_20_closed_windows_do_not_starve_open_plan(session,monkeypatch):
     await session.commit()
     monkeypatch.setattr(groups,'in_window',lambda plan,*a:plan.name=='open')
     calls=[]
-    async def enqueue(db,plan_id):calls.append(plan_id);return {}
+    original_enqueue=groups.enqueue_group_cycle
+    async def enqueue(db,plan_id,**kwargs):
+        calls.append(plan_id)
+        return await original_enqueue(db,plan_id,**kwargs)
+    async def no_dispatch(*args):pass
+    monkeypatch.setattr(groups,'bounded',no_dispatch)
     monkeypatch.setattr(groups,'enqueue_group_cycle',enqueue)
     await groups.run_group_jobs();await groups.run_group_jobs()
     assert len(calls)==1

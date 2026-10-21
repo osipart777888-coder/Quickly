@@ -32,6 +32,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.client_ip import client_ip_from_request
 from app.database import init_db, db_url
 from app.settings_manager import settings
+from app.maintenance import create_background_task
 from app.routers import inbox, leads, campaigns, test_mode
 from app.routers import gmail_oauth
 from app.routers import office365_oauth
@@ -138,7 +139,7 @@ async def lifespan(app: FastAPI):
             replace_existing=True,
             max_instances=1,
         )
-        schedule.start()
+        schedule.start(paused=bool(getattr(app.state,'restore_startup_pending',False)))
 
         from app.backup_schedule import register_scheduled_backup_from_db
 
@@ -147,6 +148,7 @@ async def lifespan(app: FastAPI):
         # Perform a global recalculation on startup to ensure the queue reflects
         # any configuration changes that may have occurred while the server was down.
         async def kickoff():
+            if hasattr(app.state,'restore_ready'):await app.state.restore_ready.wait()
             await asyncio.sleep(1)
             try:
                 from app.routers.schedule import run_recalculate_all_in_new_session
@@ -160,26 +162,45 @@ async def lifespan(app: FastAPI):
         # Track startup tasks so we can cancel them cleanly on shutdown.
         # Without this, rapid reloads leave open DB transactions which cause
         # "unexpected EOF on client connection with an open transaction" errors.
-        startup_tasks = [
-            asyncio.create_task(kickoff()),
-            asyncio.create_task(queue_sync_for_all_inboxes(reason="startup")),
-        ]
+        async def startup_sync():
+            if hasattr(app.state,'restore_ready'):await app.state.restore_ready.wait()
+            await queue_sync_for_all_inboxes(reason='startup')
+        startup_tasks = [create_background_task(kickoff()),create_background_task(startup_sync())]
 
-        yield
-
-        # Cancel any still-running startup tasks before the event loop closes.
-        for task in startup_tasks:
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except (asyncio.CancelledError, Exception):
-                    pass
-
-        schedule.shutdown()
+        try:
+            yield
+        finally:
+            for task in startup_tasks:
+                if task and not task.done():
+                    task.cancel()
+                    try:await task
+                    except (asyncio.CancelledError,Exception):pass
+            schedule.shutdown()
 
 
-app = FastAPI(title="Quickly", lifespan=lifespan)
+@asynccontextmanager
+async def recoverable_lifespan(application):
+    from app.restore_safety import recover_interrupted_restore
+    from app.database import engine
+    pending=await asyncio.to_thread(recover_interrupted_restore,db_url)
+    application.state.restore_startup_pending=bool(pending)
+    application.state.restore_ready=asyncio.Event()
+    if not pending:application.state.restore_ready.set()
+    try:
+        async with lifespan(application):
+            for activation in pending:await asyncio.to_thread(activation.confirm)
+            if pending:application.state.schedule.resume()
+            pending=[]
+            application.state.restore_ready.set()
+            yield
+    except BaseException:
+        if pending:
+            await engine.dispose()
+            for activation in pending:await asyncio.to_thread(activation.rollback)
+        raise
+
+
+app = FastAPI(title="Quickly", lifespan=recoverable_lifespan)
 
 # ---------------------------------------------------------------------------
 # Security middleware (CSP, HSTS, X-Frame-Options, …)
@@ -234,6 +255,8 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 from app.maintenance import MaintenanceMiddleware
 app.add_middleware(MaintenanceMiddleware)
+from app.origin_guard import OriginGuardMiddleware
+app.add_middleware(OriginGuardMiddleware)
 
 # ---------------------------------------------------------------------------
 # Auth router (public endpoints: login, register, setup-status, restore-setup, refresh)
@@ -271,7 +294,10 @@ app.include_router(office365_oauth.callback_router)
 app.include_router(office365_webhook_router.router)
 app.include_router(schedule_router.router, dependencies=_auth_deps)
 app.include_router(settings_router.router, dependencies=_auth_deps)
-app.include_router(backup_router.router, dependencies=_auth_deps)
+# Every backup endpoint authenticates explicitly. Restore must close its short
+# auth session before switching DBs; global auth would pin another transaction
+# (and API-key last_used_at lock) for the entire restore request.
+app.include_router(backup_router.router)
 app.include_router(unibox_router.router, dependencies=_auth_deps)
 # Gmail Pub/Sub push endpoint is called by Google (no session cookie); it
 # validates its own shared token — see gmail_push_webhook.

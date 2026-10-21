@@ -1,5 +1,7 @@
 """APScheduler hook for scheduled PostgreSQL backups."""
 from __future__ import annotations
+from app.maintenance import background_work
+
 
 import logging
 from typing import TYPE_CHECKING
@@ -56,6 +58,7 @@ async def deliver_backup_payload(data: bytes, cfg: dict) -> dict:
     return out
 
 
+@background_work
 async def run_scheduled_backup_job() -> None:
     async with AsyncSessionLocal() as db:
         cfg = await get_backup_config(db)

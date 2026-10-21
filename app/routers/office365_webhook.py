@@ -26,6 +26,9 @@ but each notification is validated by comparing the ``clientState`` shared
 secret stored in the database (HMAC-safe comparison) to prevent spoofed calls.
 """
 from __future__ import annotations
+from app.mail_io import bounded_io,await_thread,read_limit_error
+from app.maintenance import background_work
+
 
 import asyncio
 import hmac
@@ -112,10 +115,11 @@ async def _fresh_token(db: AsyncSession, inbox_id: int) -> Office365Account:
     return account
 
 
+@bounded_io(reading=True)
 async def _force_refresh_token(db: AsyncSession, account: Office365Account) -> bool:
     from app.routers.office365_oauth import refresh_access_token as _refresh_o365
 
-    refreshed = _refresh_o365(account)
+    refreshed = await await_thread(_refresh_o365,account)
     if refreshed:
         await db.flush()
         return True
@@ -135,6 +139,7 @@ async def _force_refresh_token(db: AsyncSession, account: Office365Account) -> b
     return False
 
 
+@bounded_io(reading=True)
 async def _graph_request_with_refresh(
     db: AsyncSession,
     account: Office365Account,
@@ -143,12 +148,12 @@ async def _graph_request_with_refresh(
     body: dict | None = None,
 ) -> dict:
     try:
-        return await asyncio.to_thread(_graph_request, method, url, account.access_token, body)
+        return await await_thread(_graph_request, method, url, account.access_token, body)
     except GraphAPIError as exc:
-        if exc.status_code in (401, 403):
+        if exc.status_code in (401, 403) and not read_limit_error(exc):
             refreshed = await _force_refresh_token(db, account)
             if refreshed:
-                return await asyncio.to_thread(_graph_request, method, url, account.access_token, body)
+                return await await_thread(_graph_request, method, url, account.access_token, body)
         detail = (
             f"Microsoft Graph API error {exc.status_code}"
             if exc.status_code
@@ -434,6 +439,7 @@ async def handle_graph_notifications(
 # Scheduled renewal job
 # ---------------------------------------------------------------------------
 
+@background_work
 async def renew_expiring_subscriptions() -> None:
     """Background job: renew Microsoft Graph subscriptions approaching expiry.
 

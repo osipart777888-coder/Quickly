@@ -105,7 +105,7 @@ async def engine(monkeypatch):
                 await eng.dispose()
             except Exception:
                 pass
-            eng = None
+            raise RuntimeError('Explicit PostgreSQL test database is unavailable; SQLite fallback is forbidden')
 
     if eng is None:
         # Shared in-memory SQLite with multiple pooled connections. StaticPool

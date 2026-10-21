@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user
+from app.mail_io import mail_thread
 from app.database import get_db
 from app.models import Inbox, SmtpAccount
 from app.smtp_utils import (
@@ -233,6 +234,7 @@ async def upsert_smtp_account(
 @router.post("/diagnose")
 async def diagnose_unsaved(
     data: SmtpAccountUpsert,
+    db: AsyncSession = Depends(get_db),
     _user=Depends(get_current_user),
 ):
     """Diagnose SMTP/IMAP credentials that are not saved yet (Add Inbox panel).
@@ -275,7 +277,7 @@ async def diagnose_unsaved(
     _last_diagnose_at[key] = __import__("time").monotonic()
 
     report = await asyncio.wait_for(
-        asyncio.to_thread(
+        mail_thread(db if isinstance(db,AsyncSession) else None,
             diagnose,
             host=data.smtp_host or "",
             port=int(data.smtp_port or 587),
@@ -340,7 +342,7 @@ async def diagnose_smtp_account(
     # Run the blocking probe off the event loop; it has its own per-stage (~8s)
     # and overall (~30s) timeouts so the request worker cannot hang.
     report = await asyncio.wait_for(
-        asyncio.to_thread(diagnose_account, acct, **({"connection_only": True} if local_install() else {})), timeout=45.0
+        mail_thread(db,diagnose_account, acct, **({"connection_only": True} if local_install() else {})), timeout=45.0
     )
 
     acct.last_diagnostic_at = utcnow()
@@ -490,7 +492,7 @@ async def test_smtp_account(
     if not acct:
         raise HTTPException(404, "SMTP account not configured for this inbox")
 
-    smtp_res, imap_res = await asyncio.to_thread(test_account_connections, acct)
+    smtp_res, imap_res = await mail_thread(db,test_account_connections, acct)
     ok = bool(smtp_res.ok and imap_res.ok)
     if ok:
         # A successful connection test means the credentials work again; clear

@@ -1,0 +1,76 @@
+{
+  "passed": 14,
+  "failed": 0,
+  "skipped": 0,
+  "scenarios": [
+    {
+      "scenario": "corrupt_dump",
+      "result": "passed",
+      "old_state_unchanged": true
+    },
+    {
+      "scenario": "wrong_encryption_key",
+      "result": "passed",
+      "old_state_unchanged": true
+    },
+    {
+      "scenario": "incompatible_migration",
+      "result": "passed",
+      "old_state_unchanged": true
+    },
+    {
+      "scenario": "missing_replay_uniqueness",
+      "result": "passed",
+      "old_state_unchanged": true
+    },
+    {
+      "scenario": "sql_failure_during_atomic_swap",
+      "result": "passed",
+      "old_state_unchanged": true
+    },
+    {
+      "scenario": "post_switch_initialization_failure",
+      "result": "passed",
+      "old_state_unchanged": true
+    },
+    {
+      "scenario": "rollback_unavailable_then_startup_recovery",
+      "result": "passed",
+      "old_state_unchanged": true
+    },
+    {
+      "scenario": "process_death_after_swap",
+      "result": "passed",
+      "old_state_unchanged": true
+    },
+    {
+      "scenario": "application_startup_failure",
+      "result": "passed",
+      "old_state_unchanged": true
+    },
+    {
+      "scenario": "concurrent_restore",
+      "result": "passed"
+    },
+    {
+      "scenario": "restore_with_active_queue",
+      "result": "passed",
+      "inflight_completed": 1
+    },
+    {
+      "scenario": "web_post_initialization_rollback",
+      "result": "passed",
+      "old_state_unchanged": true
+    },
+    {
+      "scenario": "web_restore_api_key_short_auth_session",
+      "result": "passed"
+    },
+    {
+      "scenario": "success_1000_accounts_10000_contacts",
+      "result": "passed",
+      "queued_preserved": 1000,
+      "controls_stopped": true
+    }
+  ]
+}

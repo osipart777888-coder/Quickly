@@ -173,6 +173,8 @@ class _MCPAuthASGI:
     """Require the same auth as the REST API before handling MCP Streamable HTTP."""
 
     __slots__ = ("_inner",)
+    # SlowAPI identifies mounted endpoints as well as ordinary route functions.
+    __name__ = "quickly_mcp"
 
     def __init__(self, inner):
         self._inner = inner

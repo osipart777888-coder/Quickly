@@ -1,6 +1,8 @@
 """Explicitly labelled diagnostics between configured accounts owned by the user."""
 from __future__ import annotations
 from app.maintenance import background_work
+from app.mail_io import bounded_io, await_thread
+from app.diagnostic_observation import policy as observation_policy, deadline_for, retry_delay, folder_kind
 
 import asyncio
 from datetime import timedelta
@@ -71,13 +73,13 @@ async def plan_budget(db, plan, sender_id=None, *, commit=True):
         await db.commit()
 
 
-async def start_diagnostic(db, sender_id, recipient_id, plan=None):
+async def start_diagnostic(db, sender_id, recipient_id, plan=None, *, observation_hours=48):
     if sender_id == recipient_id:
         raise ValueError('Выберите два разных собственных ящика')
     if not await db.get(Inbox,sender_id) or not await db.get(Inbox,recipient_id):
         raise ValueError('Оба ящика должны быть подключены в Quickly')
     run = DiagnosticRun(id=uuid.uuid4().hex,sender_id=sender_id,recipient_id=recipient_id,
-        plan_id=plan.id if plan else None,status='created')
+        plan_id=plan.id if plan else None,status='created',report={'observation_hours':observation_hours})
     db.add(run)
     await db.commit()
     return await execute_diagnostic(db,run,plan)
@@ -95,6 +97,8 @@ async def execute_diagnostic(db, run, plan=None):
             await db.refresh(plan)
             if not plan.enabled:
                 raise ValueError('Расписание диагностики остановлено')
+        run.sender_email=sender.email
+        run.recipient_email=recipient.email
         args = await send_arguments(db,sender)
         result = await guarded_send(db,sender,operation_key=f'diagnostic:{run.id}',kind='diagnostic',
             diagnostic_plan_id=plan.id if plan else None,diagnostic_initial=True,send=send_email,
@@ -106,10 +110,13 @@ async def execute_diagnostic(db, run, plan=None):
                   f'Идентификатор проверки: {run.id}\n'),provider=sender.provider,**args)
         operation = await db.scalar(select(MailOperation).where(MailOperation.operation_key == f'diagnostic:{run.id}'))
         run.operation_id = operation.id if operation else None
+        run.report={**(run.report or {}),'send_status':operation.status if operation else ('accepted' if isinstance(result,SendResult) else 'unknown')}
         if isinstance(result,SendResult):
             run.status = 'accepted'
+            run.accepted_at = operation.finished_at if operation else utcnow()
+            run.observation_deadline = run.accepted_at+timedelta(hours=observation_policy(plan)[0] if plan else (run.report or {}).get('observation_hours',48))
             run.message_id = result.message_id or ''
-            run.report = {'smtp_accepted':True,'received_confirmed':False,
+            run.report = {'send_status':'accepted','smtp_accepted':True,'received_confirmed':False,
                 'note':'Принято сервером отправителя. Получение пока не подтверждено.'}
         elif getattr(result,'error_type','') == 'local_deferred' and plan and plan.mode == 'group':
             run.status = 'queued'
@@ -191,12 +198,13 @@ def _imap_find(account, marker, *, reply_to=''):
             pass
 
 
+@bounded_io(reading=True)
 async def find_received(db, inbox, run, *, reply=False):
     if inbox.provider == 'smtp':
         account = await db.scalar(select(SmtpAccount).where(SmtpAccount.inbox_id == inbox.id))
         if not account or not account.imap_host:
             return {'found': False, 'unavailable': 'IMAP не настроен; получение подтвердить нельзя'}
-        return await asyncio.to_thread(_imap_find, account, run.id, reply_to=run.message_id if reply else '')
+        return await await_thread(_imap_find, account, run.id, reply_to=run.message_id if reply else '')
     # Reuse Quickly's official OAuth API clients; no mailbox passwords for Google/Microsoft.
     from app import unibox
     if inbox.provider == 'gmail':
@@ -205,14 +213,14 @@ async def find_received(db, inbox, run, *, reply=False):
             return {'found': False, 'unavailable': 'Google OAuth не подключён'}
         cid, secret = await get_google_oauth_credentials(db)
         if account.token_expiry is None or account.token_expiry <= utcnow() + timedelta(minutes=2):
-            if not await asyncio.to_thread(unibox.refresh_access_token, account, cid, secret):
+            if not await await_thread(unibox.refresh_access_token, account, cid, secret):
                 return {'found': False, 'unavailable': 'Google OAuth требует повторного подключения'}
             await db.flush()
         query = f'in:anywhere subject:{run.id}'
-        result = await asyncio.to_thread(unibox._gmail_request_json, 'GET', f'{unibox.GMAIL_API_ROOT}/messages',
+        result = await await_thread(unibox._gmail_request_json, 'GET', f'{unibox.GMAIL_API_ROOT}/messages',
                                         account.access_token, params={'q': query, 'maxResults': 10})
         for item in result.get('messages', []):
-            data = await asyncio.to_thread(unibox._gmail_get_message, account.access_token, item['id'])
+            data = await await_thread(unibox._gmail_get_message, account.access_token, item['id'])
             headers = {h['name'].lower(): h['value'] for h in data.get('payload', {}).get('headers', [])}
             if reply and run.message_id not in headers.get('in-reply-to', ''):
                 continue
@@ -227,10 +235,10 @@ async def find_received(db, inbox, run, *, reply=False):
         return {'found': False, 'unavailable': 'Microsoft OAuth не подключён'}
     cid, secret, tenant = await get_office365_oauth_credentials(db)
     if account.token_expiry is None or account.token_expiry <= utcnow() + timedelta(minutes=2):
-        if not await asyncio.to_thread(unibox.refresh_office365_token, account, cid, secret, tenant):
+        if not await await_thread(unibox.refresh_office365_token, account, cid, secret, tenant):
             return {'found': False, 'unavailable': 'Microsoft OAuth требует повторного подключения'}
         await db.flush()
-    result = await asyncio.to_thread(unibox._graph_request_json, 'GET', 'https://graph.microsoft.com/v1.0/me/messages',
+    result = await await_thread(unibox._graph_request_json, 'GET', 'https://graph.microsoft.com/v1.0/me/messages',
                                     account.access_token, params={'$filter': f"contains(subject,'{run.id}')", '$top': 20,
                                         '$select': 'subject,internetMessageId,internetMessageHeaders,parentFolderId'})
     for data in result.get('value', []):
@@ -245,28 +253,98 @@ async def find_received(db, inbox, run, *, reply=False):
     return {'found': False, 'checked_folders': ['Microsoft /me/messages: доступные сообщения']}
 
 
-async def check_receipt(db, run, *, reply=False):
-    run.last_checked_at = utcnow()
-    inbox = await db.get(Inbox, run.sender_id if reply else run.recipient_id)
+async def check_receipt(db, run, *, reply=False, manual=True):
+    from app.local_models import MailboxReadState
+    now=utcnow()
+    plan=await db.get(DiagnosticPlan,run.plan_id) if run.plan_id else None
+    deadline=deadline_for(run,plan,reply=reply)
+    if not manual and deadline<=now:
+        run.observation_status='expired'
+        run.status='reply_expired' if reply else 'expired'
+        run.next_check_at=None
+        await db.commit()
+        return run
+    if run.status in {'queued','created','dispatching','failed','skipped','cancelled'}:
+        raise ValueError('Письмо ещё не отправлено; проверять получение нельзя')
+    inbox=await db.get(Inbox,run.sender_id if reply else run.recipient_id)
+    if not inbox:
+        raise ValueError('Получающий ящик удалён')
+    if not manual and inbox.paused:
+        run.observation_status='temporarily_unavailable'
+        run.check_error='Получающий ящик приостановлен; автоматическое чтение остановлено'
+        run.next_check_at=now+timedelta(seconds=observation_policy(plan)[1])
+        await db.commit()
+        return run
+    state=await db.get(MailboxReadState,inbox.id)
+    if state and state.retry_after and state.retry_after>now:
+        run.observation_status='temporarily_unavailable'
+        run.check_error='Провайдер ограничил чтение. Следующая попытка после '+state.retry_after.isoformat()+' UTC'
+        run.next_check_at=state.retry_after
+        await db.commit()
+        return run
+    run.last_checked_at=now
+    run.check_attempts=(run.check_attempts or 0)+1
+    # Persist a lease before network access; a crash does not trigger a tight retry loop.
+    base=observation_policy(plan)[1]
+    run.next_check_at=now+timedelta(seconds=base)
+    await db.commit()
+    delay=None
     try:
-        result = await find_received(db, inbox, run, reply=reply)
+        result=await find_received(db,inbox,run,reply=reply)
     except Exception as exc:
-        result = {'found': False, 'error': sanitize_connection_error(str(exc))}
-    report = dict(run.report or {})
-    report['reply_check' if reply else 'receipt_check'] = result
+        code=getattr(exc,'status_code',0)
+        delay=retry_delay(getattr(exc,'retry_after',None),now)
+        import imaplib
+        quota=code==403 and any(word in str(getattr(exc,'body','')).lower() for word in ['ratelimitexceeded','quotaexceeded','dailylimitexceeded'])
+        auth_error=code in {401,403} and not quota or isinstance(exc,imaplib.IMAP4.error) and any(word in str(exc).lower() for word in ['auth','login','credentials'])
+        if auth_error:
+            inbox.paused=True
+            result={'found':False,'unavailable':'Ошибка авторизации чтения. Исправьте подключение и вручную снимите паузу.'}
+        elif code in {429,503} or quota or delay:
+            result={'found':False,'unavailable':'Провайдер временно ограничил чтение почты'}
+            delay=delay or timedelta(seconds=min(3600,base*2**min(run.check_attempts,5)))
+        else:
+            result={'found':False,'error':sanitize_connection_error(str(exc)) or 'Проверка временно недоступна'}
+    report=dict(run.report or {})
+    report['reply_check' if reply else 'receipt_check']=result
     if result.get('found'):
+        run.observation_status='received'
+        run.check_error=''
+        run.next_check_at=None
         if reply:
-            run.status = 'reply_received'
+            run.status='reply_received'
+            report['reply_received_at']=utcnow().isoformat()
         elif run.status not in {'reply_sent','reply_received'}:
-            run.status = 'received'
+            run.status='received'
         if not reply:
-            run.received_at = utcnow()
-            run.duration_ms = max(0, int((run.received_at - run.created_at).total_seconds() * 1000))
-            run.folder = result.get('folder', '')
-            run.authentication_headers = result.get('headers', {})
-            report['received_confirmed'] = True
-            report['timing_note'] = 'Время до обнаружения при проверке; включает интервал опроса'
-    run.report = report
+            run.received_at=run.received_at or utcnow()
+            run.duration_ms=max(0,int((run.received_at-(run.accepted_at or run.created_at)).total_seconds()*1000))
+            run.folder=result.get('folder','')
+            run.folder_kind=result.get('folder_kind') or folder_kind(run.folder,provider=inbox.provider)
+            run.authentication_headers=result.get('headers',{})
+            report['received_confirmed']=True
+            report['timing_note']='Время до обнаружения; включает интервал опроса'
+    else:
+        unavailable=result.get('unavailable') or result.get('error')
+        if result.get('unavailable_folders'):
+            unavailable=unavailable or 'Часть папок недоступна; отсутствие письма не подтверждено'
+        run.observation_status='temporarily_unavailable' if unavailable else 'not_found'
+        run.check_error=unavailable or ''
+        delay=delay or timedelta(seconds=min(3600,base*2**min(max(0,run.check_attempts-1),5)))
+        run.next_check_at=now+delay
+        if result.get('unavailable')=='Провайдер временно ограничил чтение почты':
+            if db.bind.dialect.name=='postgresql':
+                from sqlalchemy.dialects.postgresql import insert
+            else:
+                from sqlalchemy.dialects.sqlite import insert
+            from sqlalchemy import case
+            stmt=insert(MailboxReadState).values(inbox_id=inbox.id,retry_after=run.next_check_at)
+            await db.execute(stmt.on_conflict_do_update(index_elements=['inbox_id'],set_={'retry_after':case((MailboxReadState.retry_after>run.next_check_at,MailboxReadState.retry_after),else_=run.next_check_at)}))
+        if deadline<=utcnow():
+            run.observation_status='expired'
+            run.status='reply_expired' if reply else 'expired'
+            run.next_check_at=None
+    run.report=report
     await db.commit()
     return run
 
@@ -298,6 +376,10 @@ async def send_diagnostic_reply(db, run, *, allow_claimed=False):
             raise DiagnosticDeferred(result.message)
         raise ValueError(getattr(result, 'message', '') or 'Результат ответа неизвестен; повтор заблокирован')
     run.reply_message_id = result.message_id
+    run.reply_accepted_at = utcnow()
+    run.reply_observation_deadline = run.reply_accepted_at+timedelta(hours=observation_policy(plan)[0])
+    run.next_check_at = None
+    run.observation_status = 'pending'
     run.status = 'reply_sent'
     run.report = {**(run.report or {}), 'diagnostic_reply_accepted': True}
     await db.commit()

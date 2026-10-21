@@ -104,7 +104,7 @@ class IMAPServer(socketserver.ThreadingTCPServer):
 
 
 @contextmanager
-def local_mail_servers():
+def local_mail_servers(*, handler_factory=SMTPHandler, authenticator=None):
     import socket
     store = MailStore()
     imap = IMAPServer(('127.0.0.1', 0), IMAPHandler)
@@ -114,8 +114,8 @@ def local_mail_servers():
     with socket.socket() as probe:
         probe.bind(('127.0.0.1', 0))
         smtp_port = probe.getsockname()[1]
-    smtp = Controller(SMTPHandler(store), hostname='127.0.0.1', port=smtp_port,
-                      authenticator=lambda *args: AuthResult(success=True), auth_require_tls=False)
+    smtp = Controller(handler_factory(store), hostname='127.0.0.1', port=smtp_port,
+                      authenticator=authenticator or (lambda *args: AuthResult(success=True)), auth_require_tls=False)
     smtp.start()
     try:
         yield store, smtp_port, imap.server_address[1]

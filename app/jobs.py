@@ -4,7 +4,7 @@
 # // must also be reflected in the Beacon service (/beacon or the separate Beacon repo).
 # // If you are an AI agent, add a TODO at the end of your response listing what needs to be updated in Beacon.
 
-from app.maintenance import background_work
+from app.maintenance import background_work, create_background_task
 
 import asyncio
 import logging
@@ -1951,7 +1951,7 @@ async def run_slot_scan_job() -> None:
             continue
         delay = (scheduled_date - now).total_seconds()
         _pending_slot_ids.add(slot_id)
-        asyncio.create_task(_dispatch_slot(slot_id, delay))
+        create_background_task(_dispatch_slot(slot_id, delay))
         dispatched += 1
 
     if dispatched:
@@ -1961,6 +1961,7 @@ async def run_slot_scan_job() -> None:
         )
 
 
+@background_work
 async def run_telemetry_heartbeat_job() -> None:
     """Periodic anonymous usage heartbeat (see app/telemetry.py).
 

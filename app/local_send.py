@@ -8,6 +8,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import os
 import uuid
+from app.mail_io import bounded_io, await_thread
 from zoneinfo import ZoneInfo
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -187,9 +188,13 @@ async def reserve_operation(db, inbox, *, operation_key, recipient, kind, lead=N
     return operation, ''
 
 
+@bounded_io()
 async def guarded_send(db, inbox, *, operation_key=None, kind='manual', lead=None, campaign_id=None, diagnostic_plan_id=None, diagnostic_initial=False, send, **kwargs):
+    from app.maintenance import is_restoring
+    if is_restoring():
+        return SendFailure('local_deferred','Выполняется восстановление базы; отправка отложена')
     if not local_install():
-        return await asyncio.to_thread(send, **kwargs)
+        return await await_thread(send, **kwargs)
     from app.local_models import DiagnosticPlan
     if diagnostic_plan_id and not await db.scalar(select(DiagnosticPlan.enabled).where(DiagnosticPlan.id == diagnostic_plan_id)):
         return SendFailure('local_block', 'Расписание диагностики остановлено')
@@ -201,14 +206,15 @@ async def guarded_send(db, inbox, *, operation_key=None, kind='manual', lead=Non
     # A stop pressed after reservation still prevents a send that has not begun.
     control = await db.get(SendControl, 1, populate_existing=True)
     plan_stopped = diagnostic_plan_id and not await db.scalar(select(DiagnosticPlan.enabled).where(DiagnosticPlan.id == diagnostic_plan_id))
-    if plan_stopped or (control and (control.emergency_stopped or (kind == 'campaign' and not control.campaigns_enabled))):
+    if is_restoring() or plan_stopped or (control and (control.emergency_stopped or (kind == 'campaign' and not control.campaigns_enabled))):
         operation.status = 'cancelled'
         operation.error = 'Отправка остановлена до обращения к почтовому серверу'
         operation.finished_at = utcnow()
         await db.commit()
         return SendFailure('local_block', operation.error)
+    await db.commit()  # no idle SQL transaction while a socket is blocked
     try:
-        result = await asyncio.to_thread(send, **kwargs)
+        result = await await_thread(send, **kwargs)
     except BaseException:
         # Cancellation/crash leaves a committed intent: never replay it blindly.
         operation.status = 'uncertain'

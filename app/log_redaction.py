@@ -12,6 +12,58 @@ from __future__ import annotations
 
 import logging
 import re
+import os
+import threading
+import traceback
+
+_known_secrets=set()
+_secrets_snapshot=()
+_secrets_lock=threading.Lock()
+_CREDENTIAL_RE=re.compile(r'''(?ix)(["']?(?:password|smtp_password|imap_password|access_token|refresh_token|client_secret|api_key|x-api-key|authorization)["']?\s*[:=]\s*["']?)([^\s,"'}]+)''')
+_BEARER_RE=re.compile(r'(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+')
+_CONNECT_RE=re.compile(r'(/oauth/connect/)[A-Za-z0-9_-]+')
+_OAUTH_QUERY_RE=re.compile(r'(?i)([?&](?:code|state|access_token|refresh_token|client_secret|api_key)=)[^&\s#"\']+')
+
+def register_secret(value):
+    global _secrets_snapshot
+    if not isinstance(value,str) or len(value)<8:return
+    with _secrets_lock:
+        if value not in _known_secrets:
+            _known_secrets.add(value)
+            _secrets_snapshot=tuple(sorted(_known_secrets,key=len,reverse=True))
+
+def redact_credentials(value):
+    if isinstance(value,(bytes,BaseException,dict,list,tuple)):value=str(value)
+    if not isinstance(value,str):return value
+    for secret in _secrets_snapshot:value=value.replace(secret,'REDACTED')
+    value=_BEARER_RE.sub(r'\1REDACTED',value)
+    value=_CONNECT_RE.sub(r'\1REDACTED',value)
+    value=_OAUTH_QUERY_RE.sub(r'\1REDACTED',value)
+    return _CREDENTIAL_RE.sub(r'\1REDACTED',redact_token_in_path(value))
+
+def _install_record_factory():
+    previous=logging.getLogRecordFactory()
+    if getattr(previous,'_quickly_redaction',False):return
+    for name in ['QUICKLY_SECRET_KEY','QUICKLY_ENCRYPTION_KEY','POSTGRES_PASSWORD','SMTP_PASSWORD']:
+        register_secret(os.getenv(name))
+    def factory(*args,**kwargs):
+        record=previous(*args,**kwargs)
+        if record.name=='uvicorn.access':
+            # AccessFormatter needs its original five-element tuple.
+            if isinstance(record.args,tuple):record.args=tuple(redact_credentials(v) for v in record.args)
+        else:
+            # Redact after %-formatting: masking token=%s in a template would
+            # remove a placeholder while leaving its argument behind.
+            try:message=record.getMessage()
+            except (TypeError,ValueError):message=str(record.msg)+' '+str(record.args)
+            record.msg=redact_credentials(message)
+            record.args=()
+        if record.exc_info:
+            record.exc_text=redact_credentials(''.join(traceback.format_exception(*record.exc_info)))
+            record.exc_info=None
+        return record
+    factory._quickly_redaction=True
+    logging.setLogRecordFactory(factory)
 
 __all__ = ["redact_token_in_path", "TokenRedactionFilter", "install_log_redaction"]
 
@@ -74,6 +126,7 @@ def install_log_redaction() -> TokenRedactionFilter:
     filters.  Should be called as early as possible during app startup, before
     uvicorn configures its own logging if possible.
     """
+    _install_record_factory()
     uvicorn_access = logging.getLogger("uvicorn.access")
     for existing in uvicorn_access.filters:
         if isinstance(existing, TokenRedactionFilter):

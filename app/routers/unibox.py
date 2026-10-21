@@ -431,12 +431,15 @@ async def send_unibox_email(data: UniboxSendRequest, db: AsyncSession = Depends(
 
 
 @router.get("/events")
-async def unibox_events_sse(request: Request):
+async def unibox_events_sse(request: Request, db: AsyncSession = Depends(get_db)):
+    # Authentication must not pin a SQL connection for the lifetime of SSE.
+    await db.commit()
     queue = await unibox_events.subscribe()
 
     async def stream():
         try:
-            while True:
+            from app.maintenance import is_restoring
+            while not is_restoring():
                 if await request.is_disconnected():
                     break
                 try:

@@ -19,6 +19,7 @@ class ControlUpdate(BaseModel):
     emergency_stopped: bool | None = None
     campaigns_enabled: bool | None = None
     confirmation: str = ''
+    mail_concurrency: int | None = Field(default=None,ge=1,le=16)
 
 
 async def get_control(db):
@@ -37,7 +38,7 @@ async def get_control(db):
 
 def control_json(control):
     return {'emergency_stopped': control.emergency_stopped, 'campaigns_enabled': control.campaigns_enabled,
-            'reason': control.reason, 'updated_at': control.updated_at}
+            'reason': control.reason, 'updated_at': control.updated_at, 'mail_concurrency': control.mail_concurrency}
 
 
 @router.get('/control')
@@ -54,6 +55,8 @@ async def update_control(data: ControlUpdate, db=Depends(get_db), _admin=Depends
         control.emergency_stopped = data.emergency_stopped
     if data.campaigns_enabled is not None:
         control.campaigns_enabled = data.campaigns_enabled
+    if data.mail_concurrency is not None:
+        control.mail_concurrency=data.mail_concurrency
     if control.emergency_stopped:
         control.campaigns_enabled = False
     control.reason = ('Аварийная остановка: новые отправки запрещены' if control.emergency_stopped else
@@ -146,6 +149,7 @@ class DiagnosticRequest(BaseModel):
     sender_id: int
     recipient_id: int
     owned_accounts_confirmed: bool = False
+    observation_hours: Literal[24,48,72] = 48
 
 
 class PlanRequest(DiagnosticRequest):
@@ -154,6 +158,7 @@ class PlanRequest(DiagnosticRequest):
     recipient_id: int | None = Field(default=None, ge=1)
     per_account_daily_limit: int = Field(default=1, ge=1, le=100)
     auto_reply: bool = False
+    poll_interval_seconds: int = Field(default=300,ge=60,le=3600)
     name: str = Field(min_length=1, max_length=255)
     inbox_ids: list[int] = Field(default_factory=list, max_length=2000)
     enabled: bool = False
@@ -165,9 +170,16 @@ class PlanRequest(DiagnosticRequest):
 
 
 def run_json(run):
-    return {key: getattr(run, key) for key in ['id', 'plan_id', 'sender_id', 'recipient_id', 'status',
+    result={key: getattr(run, key) for key in ['id', 'plan_id', 'sender_id', 'recipient_id', 'status',
         'message_id', 'reply_message_id', 'folder', 'authentication_headers', 'duration_ms', 'error',
-        'report', 'created_at', 'received_at', 'batch_id', 'started_at']}
+        'report', 'created_at', 'received_at', 'batch_id', 'started_at','accepted_at','reply_accepted_at',
+        'sender_email','recipient_email','reply_started_at','last_checked_at','next_check_at','check_attempts','observation_deadline','reply_observation_deadline',
+        'observation_status','check_error','folder_kind']}
+
+    from app.diagnostic_observation import display_status
+    result['display_status']=display_status(run)
+    result['transport_status']=(run.report or {}).get('send_status') or ('accepted' if run.accepted_at or (run.report or {}).get('smtp_accepted') else run.status)
+    return result
 
 
 @router.get('/diagnostics/plans')
@@ -180,13 +192,30 @@ async def diagnostic_plans(db=Depends(get_db)):
         .group_by(DiagnosticRun.plan_id,DiagnosticRun.batch_id,DiagnosticRun.status))).all()
     budgets = dict((await db.execute(select(DiagnosticDayQuota.plan_id,DiagnosticDayQuota.used)
         .where(DiagnosticDayQuota.day == day_bounds()[0]))).all())
+    from app.local_group_diagnostics import group_members
+    all_ids={iid for plan in rows for iid in plan.inbox_ids}
+    members={m['id']:m for m in await group_members(db,list(all_ids))} if all_ids else {}
+    paused=set((await db.execute(select(Inbox.id).where(Inbox.id.in_(all_ids),Inbox.paused==True))).scalars().all()) if all_ids else set()
+    rollups=(await db.execute(select(DiagnosticRun.plan_id,
+        func.count().filter((DiagnosticRun.accepted_at.is_not(None))|(DiagnosticRun.report['smtp_accepted'].as_boolean()==True)),
+        func.count().filter(DiagnosticRun.received_at.is_not(None)),
+        func.count().filter(DiagnosticRun.observation_status=='temporarily_unavailable'),
+        func.count().filter(DiagnosticRun.status.in_(['uncertain','reply_pending'])),
+        func.count().filter(DiagnosticRun.observation_status=='expired'))
+        .join(DiagnosticPlan,DiagnosticRun.plan_id==DiagnosticPlan.id)
+        .where(DiagnosticRun.batch_id==DiagnosticPlan.last_batch_id).group_by(DiagnosticRun.plan_id))).all()
+    rollups={r[0]:r[1:] for r in rollups}
     result = []
     for row in rows:
         item = {key:getattr(row,key) for key in ['id','name','inbox_ids','sender_id','recipient_id','mode',
             'per_account_daily_limit','auto_reply','enabled','interval_minutes','max_messages_per_day',
-            'sending_days','hours_start','hours_end','next_run_at','last_batch_id']}
+            'sending_days','hours_start','hours_end','next_run_at','last_batch_id','observation_hours','poll_interval_seconds']}
         item['cycle_counts'] = {status:count for pid,batch,status,count in counters if pid == row.id and batch == row.last_batch_id}
         item['used_today'] = budgets.get(row.id,0)
+        accepted,received,unavailable,uncertain,expired=rollups.get(row.id,(0,0,0,0,0))
+        item['summary']={'total':len(row.inbox_ids),'available':sum(members.get(i,{}).get('eligible',False) for i in row.inbox_ids),
+            'paused':sum(i in paused for i in row.inbox_ids),'queued':item['cycle_counts'].get('queued',0),
+            'accepted':accepted,'received':received,'unavailable':unavailable,'uncertain':uncertain,'expired':expired}
         result.append(item)
     return result
 
@@ -263,6 +292,8 @@ class GroupSettings(BaseModel):
     per_account_daily_limit: int = Field(ge=1,le=100)
     max_messages_per_day: int = Field(ge=1,le=100000)
     auto_reply: bool
+    observation_hours: Literal[24,48,72] | None = None
+    poll_interval_seconds: int | None = Field(default=None,ge=60,le=3600)
     sending_days: list[int] = Field(min_length=1,max_length=7)
     hours_start: str = Field(pattern=r'^([01]\d|2[0-3]):[0-5]\d$')
     hours_end: str = Field(pattern=r'^([01]\d|2[0-3]):[0-5]\d$')
@@ -276,7 +307,7 @@ async def edit_group_settings(plan_id: int, data: GroupSettings, db=Depends(get_
         raise HTTPException(404,'Групповое расписание не найдено')
     if any(day not in range(7) for day in data.sending_days) or data.hours_start >= data.hours_end:
         raise HTTPException(400,'Укажите дни и корректный интервал часов')
-    for key,value in data.model_dump().items():
+    for key,value in data.model_dump(exclude_none=True).items():
         setattr(plan,key,value)
     plan.enabled = False
     plan.next_run_at = utcnow()
@@ -309,13 +340,41 @@ async def diagnostic_runs(plan_id: int | None = None, inbox_id: int | None = Non
     return [run_json(row) for row in rows]
 
 
+@router.get('/diagnostics/export.csv')
+async def export_diagnostics(plan_id:int|None=None,inbox_id:int|None=None,db=Depends(get_db)):
+    import csv,io
+    from app.log_redaction import redact_credentials
+    from app.diagnostic_observation import STATUS_RU
+    from fastapi.responses import StreamingResponse
+    from sqlalchemy.orm import aliased
+    sender,recipient=aliased(Inbox),aliased(Inbox)
+    query=select(DiagnosticRun,sender.email,recipient.email).outerjoin(sender,sender.id==DiagnosticRun.sender_id).outerjoin(recipient,recipient.id==DiagnosticRun.recipient_id).order_by(DiagnosticRun.created_at,DiagnosticRun.id)
+    if plan_id:query=query.where(DiagnosticRun.plan_id==plan_id)
+    if inbox_id:query=query.where((DiagnosticRun.sender_id==inbox_id)|(DiagnosticRun.recipient_id==inbox_id))
+    headers=['Проверка','Отправитель','Получатель','Статус','Статус отправки','Время попытки UTC','Принято сервером UTC','Получение подтверждено UTC','Папка','Последняя проверка UTC','Попыток чтения','Завершение наблюдения UTC','Причина']
+    def safe(value):
+        if value is None:return ''
+        if hasattr(value,'isoformat'):return value.isoformat()+'Z'
+        value=redact_credentials(str(value))
+        return "'"+value if value.startswith(('=','+','-','@','\t','\r')) else value
+    async def generate():
+        buf=io.StringIO();writer=csv.writer(buf)
+        writer.writerow(headers);yield '\ufeff'+buf.getvalue();buf.seek(0);buf.truncate(0)
+        result=await db.stream(query.execution_options(yield_per=500))
+        async for run,sender_email,recipient_email in result:
+            item=run_json(run)
+            writer.writerow([safe(v) for v in [run.id,run.sender_email or sender_email,run.recipient_email or recipient_email,STATUS_RU.get(item['display_status'],item['display_status']),STATUS_RU.get(item['transport_status'],item['transport_status']),run.started_at,run.accepted_at,run.received_at,('Папка неизвестна' if run.folder_kind=='unknown' else run.folder),run.last_checked_at,run.check_attempts,run.reply_observation_deadline if run.reply_message_id else run.observation_deadline,run.check_error or run.error]])
+            yield buf.getvalue();buf.seek(0);buf.truncate(0)
+    return StreamingResponse(generate(),media_type='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename="quickly-diagnostics.csv"','Cache-Control':'no-store'})
+
+
 @router.post('/diagnostics/run')
 async def run_diagnostic(data: DiagnosticRequest, db=Depends(get_db), _admin=Depends(require_admin)):
     from app.local_diagnostics import start_diagnostic
     if not data.owned_accounts_confirmed:
         raise HTTPException(400, 'Диагностика разрешена только между вашими собственными ящиками')
     try:
-        return run_json(await start_diagnostic(db, data.sender_id, data.recipient_id))
+        return run_json(await start_diagnostic(db, data.sender_id, data.recipient_id,observation_hours=data.observation_hours))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -326,7 +385,10 @@ async def diagnostic_check(run_id: str, reply: bool = False, db=Depends(get_db))
     run = await db.get(DiagnosticRun, run_id)
     if not run:
         raise HTTPException(404, 'Проверка не найдена')
-    return run_json(await check_receipt(db, run, reply=reply))
+    try:
+        return run_json(await check_receipt(db, run, reply=reply))
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
 
 
 @router.post('/diagnostics/runs/{run_id}/reply')
@@ -553,6 +615,7 @@ async def cancel_campaign(campaign_id: int, db=Depends(get_db), _admin=Depends(r
 @router.post('/accounts/{inbox_id}/test')
 async def test_oauth_account(inbox_id: int, db=Depends(get_db), _admin=Depends(require_admin)):
     import asyncio, json
+    from app.mail_io import mail_thread
     from app import unibox
     from app.local_diagnostics import send_arguments
     from app.smtp_utils import sanitize_connection_error
@@ -563,14 +626,14 @@ async def test_oauth_account(inbox_id: int, db=Depends(get_db), _admin=Depends(r
         args = await send_arguments(db, inbox)
         if inbox.provider == 'gmail':
             account = args['gmail_account']
-            if not await asyncio.to_thread(unibox.refresh_access_token, account, args['google_client_id'], args['google_client_secret']):
+            if not await mail_thread(db,unibox.refresh_access_token, account, args['google_client_id'], args['google_client_secret']):
                 raise ValueError('Google OAuth требует повторного подключения')
-            await asyncio.to_thread(unibox._gmail_get_profile, account.access_token)
+            await mail_thread(db,unibox._gmail_get_profile, account.access_token,mail_inbox_id=inbox.id)
         else:
             account = args['office365_account']
-            if not await asyncio.to_thread(unibox.refresh_office365_token, account, args['office365_client_id'], args['office365_client_secret'], args['office365_tenant_id']):
+            if not await mail_thread(db,unibox.refresh_office365_token, account, args['office365_client_id'], args['office365_client_secret'], args['office365_tenant_id']):
                 raise ValueError('Microsoft OAuth требует повторного подключения')
-            await asyncio.to_thread(unibox._graph_request_json, 'GET', 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox', account.access_token)
+            await mail_thread(db,unibox._graph_request_json, 'GET', 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox', account.access_token,mail_inbox_id=inbox.id)
         report = {'ok': True, 'smtp': {'ok': True}, 'imap': {'ok': True}}
         health = {'smtp': 'oauth_checked', 'imap': 'oauth_checked'}
     except Exception as exc:

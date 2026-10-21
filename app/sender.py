@@ -36,6 +36,7 @@ except Exception:  # pragma: no cover - optional dependency
     AuthorizedHttp = None  # type: ignore[assignment]
 
 from app.settings_manager import settings
+from app.log_redaction import redact_credentials
 from app import time as time_provider
 from app.models import GmailAccount, Office365Account, SmtpAccount
 from app.routers.gmail_oauth import refresh_access_token  # needed for token refresh when sending via gmail
@@ -64,6 +65,11 @@ class SendFailure:
     """
     error_type: str   # "bounce", "invalid_recipient", "permission_denied", "auth_failed"
     message: str
+
+    def __post_init__(self):
+        # Provider errors can echo a credential; never persist/export it as an
+        # operation error, even when it arrives through a normally safe field.
+        self.message=redact_credentials(self.message)
 
     def __bool__(self):
         return False
@@ -104,7 +110,7 @@ def _log_gmail_call(
         entry["error"] = error
     try:
         with open(_GMAIL_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, indent=2) + "\n---\n")
+            f.write(redact_credentials(json.dumps(entry, indent=2)) + "\n---\n")
     except OSError:
         log.warning("Could not write to gmail log file at %s", _GMAIL_LOG_PATH)
 
@@ -962,7 +968,7 @@ def _log_office365_call(
         entry["error"] = error
     try:
         with open(_O365_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, indent=2) + "\n---\n")
+            f.write(redact_credentials(json.dumps(entry, indent=2)) + "\n---\n")
     except OSError:
         log.warning("Could not write to office365 log file at %s", _O365_LOG_PATH)
 
@@ -1230,7 +1236,7 @@ def _log_smtp_call(
         entry["error"] = error
     try:
         with open(_SMTP_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, indent=2) + "\n---\n")
+            f.write(redact_credentials(json.dumps(entry, indent=2)) + "\n---\n")
     except OSError:
         log.warning("Could not write to smtp log file at %s", _SMTP_LOG_PATH)
 
@@ -1348,12 +1354,19 @@ def _send_via_smtp(
             # is broken, so don't mark the whole inbox failing.
             return SendFailure(error_type="bounce", message=f"SMTP rejected the message ({code}): {err}")
         _record_smtp_failure(smtp_account, f"SMTP DATA error ({code}): {err}")
-        return None
+        return SendFailure(error_type="provider_limited", message=f"SMTP temporarily rejected the message ({code}): {err}")
     except smtplib.SMTPAuthenticationError as e:
         err = str(e)[:300]
         _log_smtp_call(to_email, from_email, subject, thread_id=thread_key, status="ERROR", error=err)
         _record_smtp_failure(smtp_account, f"SMTP authentication failed: {err}")
         return SendFailure(error_type="auth_failed", message=f"SMTP authentication failed: {err}")
+    except smtplib.SMTPRecipientsRefused as e:
+        codes=[value[0] for value in e.recipients.values()]
+        return SendFailure(error_type='bounce' if codes and all(c>=500 for c in codes) else 'provider_limited',
+                           message='SMTP rejected all recipients: '+str(codes))
+    except smtplib.SMTPResponseException as e:
+        _record_smtp_failure(smtp_account,f'SMTP rejected the command ({e.smtp_code})')
+        return SendFailure(error_type='smtp_rejected', message=f'SMTP rejected the command ({e.smtp_code})')
     except (smtplib.SMTPException, socket.error, OSError) as e:
         _log_smtp_call(to_email, from_email, subject, thread_id=thread_key, status="ERROR", error=str(e)[:300])
         log.error("SMTP send error: %s", e)

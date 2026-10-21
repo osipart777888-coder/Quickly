@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.mail_io import mail_thread
 from app.database import get_db
 from app.models import Inbox, GmailAccount, Office365Account, AppSetting, SmtpAccount
 from app.smtp_utils import derive_inbox_health
@@ -224,11 +225,9 @@ async def get_system_health(db: AsyncSession = Depends(get_db)):
     # Gather non-DB calls concurrently; run DB queries sequentially.
     # AsyncSession does not support concurrent operations on the same session.
     # ------------------------------------------------------------------
-    google_creds, o365_creds, unibox_status = await asyncio.gather(
-        get_google_oauth_credentials(db),
-        get_office365_oauth_credentials(db),
-        get_unibox_sync_status(),
-    )
+    google_creds=await get_google_oauth_credentials(db)
+    o365_creds=await get_office365_oauth_credentials(db)
+    unibox_status=await get_unibox_sync_status()
 
     gmail_sync_cfg = await get_gmail_sync_config(db)
     test_mode_val = await get_test_mode(db)
@@ -254,17 +253,20 @@ async def get_system_health(db: AsyncSession = Depends(get_db)):
     smtp_by_inbox: dict[int, SmtpAccount] = {sa.inbox_id: sa for sa, _inbox in smtp_rows_list}
     inbox_list = list(inbox_rows.scalars().all())
 
+    await db.commit()  # release SQL while bounded network probes wait
     gmail_probe_results = []
     o365_probe_results = []
     domain_probe_map: dict[int, str] = {}
     if gmail_rows_list:
         gmail_probe_results = await asyncio.gather(
-            *[asyncio.to_thread(_probe_gmail, ga.access_token or "") for ga, _ in gmail_rows_list]
+            *[mail_thread(None,_probe_gmail, ga.access_token or "",mail_inbox_id=ga.inbox_id) for ga, _ in gmail_rows_list],return_exceptions=True
         )
+        gmail_probe_results=['unknown' if isinstance(v,BaseException) else v for v in gmail_probe_results]
     if o365_rows_list:
         o365_probe_results = await asyncio.gather(
-            *[asyncio.to_thread(_probe_o365, oa.access_token or "") for oa, _ in o365_rows_list]
+            *[mail_thread(None,_probe_o365, oa.access_token or "",mail_inbox_id=oa.inbox_id) for oa, _ in o365_rows_list],return_exceptions=True
         )
+        o365_probe_results=['unknown' if isinstance(v,BaseException) else v for v in o365_probe_results]
     inboxes_with_domains = [(inbox.id, inbox.tracking_domain) for inbox in inbox_list if inbox.tracking_domain]
     if inboxes_with_domains:
         raw_domain_probes = await asyncio.gather(

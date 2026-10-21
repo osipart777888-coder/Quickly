@@ -12,6 +12,7 @@ class SendControl(Base):
     campaigns_enabled = Column(Boolean, nullable=False, default=False)
     reason = Column(Text, nullable=False, default='Кампании ожидают явного разрешения пользователя')
     updated_at = Column(DateTime, nullable=False, default=utcnow)
+    mail_concurrency = Column(Integer, nullable=False, default=4)
 
 
 class SenderDayQuota(Base):
@@ -25,6 +26,12 @@ class SenderPacing(Base):
     __tablename__ = 'local_sender_pacing'
     inbox_id = Column(Integer, ForeignKey('inbox.id'), primary_key=True)
     last_reserved_at = Column(DateTime, nullable=False)
+
+
+class MailboxReadState(Base):
+    __tablename__ = 'local_mailbox_read_state'
+    inbox_id = Column(Integer, ForeignKey('inbox.id'), primary_key=True)
+    retry_after = Column(DateTime, nullable=True)
 
 
 class MailOperation(Base):
@@ -60,6 +67,9 @@ class DiagnosticPlan(Base):
     auto_reply = Column(Boolean, nullable=False, default=False)
     rotation_offset = Column(Integer, nullable=False, default=0)
     last_batch_id = Column(String(32), nullable=True)
+    last_dispatched_at = Column(DateTime, nullable=True)
+    observation_hours = Column(Integer, nullable=False, default=48)
+    poll_interval_seconds = Column(Integer, nullable=False, default=300)
     sender_id = Column(Integer, ForeignKey('inbox.id'), nullable=False)
     recipient_id = Column(Integer, ForeignKey('inbox.id'), nullable=False)
     enabled = Column(Boolean, nullable=False, default=False)
@@ -79,6 +89,18 @@ class DiagnosticRun(Base):
     batch_id = Column(String(32), nullable=True, index=True)
     started_at = Column(DateTime, nullable=True)
     last_checked_at = Column(DateTime, nullable=True)
+    reply_started_at = Column(DateTime, nullable=True)
+    sender_email = Column(String(320), nullable=False, default='')
+    recipient_email = Column(String(320), nullable=False, default='')
+    accepted_at = Column(DateTime, nullable=True)
+    reply_accepted_at = Column(DateTime, nullable=True)
+    observation_deadline = Column(DateTime, nullable=True)
+    reply_observation_deadline = Column(DateTime, nullable=True)
+    next_check_at = Column(DateTime, nullable=True)
+    check_attempts = Column(Integer, nullable=False, default=0)
+    observation_status = Column(String(32), nullable=False, default='pending')
+    check_error = Column(Text, nullable=False, default='')
+    folder_kind = Column(String(16), nullable=False, default='unknown')
     sender_id = Column(Integer, ForeignKey('inbox.id'), nullable=False)
     recipient_id = Column(Integer, ForeignKey('inbox.id'), nullable=False)
     status = Column(String(32), nullable=False, default='created')

@@ -663,10 +663,16 @@ async def delete_inbox(inbox_id: int, db: AsyncSession = Depends(get_db)):
     if not inbox:
         raise HTTPException(404, "Inbox not found")
     # Keep campaign assignments and delivery history intact; pause/archive first.
-    from app.local_models import MailOperation, SenderDayQuota
+    from app.local_models import MailOperation, SenderDayQuota,MailboxReadState,DiagnosticRun,DiagnosticPlan
     for model in (CampaignInbox, QueueSlot, MailOperation, SenderDayQuota):
         if await db.scalar(select(exists().where(model.inbox_id == inbox_id))):
             raise HTTPException(400, "Ящик используется кампанией, очередью или журналом. Приостановите его; история сохраняется.")
+    for model in (DiagnosticRun,DiagnosticPlan):
+        if await db.scalar(select(exists().where((model.sender_id==inbox_id)|(model.recipient_id==inbox_id)))):
+            raise HTTPException(400,"Ящик используется диагностикой. Приостановите его; очередь и история сохраняются.")
+    # A read cooldown is transient bookkeeping, not delivery history. Remove it
+    # with an otherwise unused mailbox instead of leaving a dangling FK.
+    await db.execute(MailboxReadState.__table__.delete().where(MailboxReadState.inbox_id==inbox_id))
     # Remove campaign assignments referencing this inbox
     await db.execute(
         CampaignInbox.__table__.delete().where(CampaignInbox.inbox_id == inbox_id)
@@ -706,5 +712,5 @@ async def generate_connect_url(
 
     base = app_settings.base_url.rstrip("/")
     url = f"{base}/oauth/connect/{token}"
-    log.info("generate_connect_url: inbox %s token=%s…", inbox_id, token[:12])
+    log.info("generate_connect_url: inbox %s", inbox_id)
     return ConnectUrlResponse(url=url)

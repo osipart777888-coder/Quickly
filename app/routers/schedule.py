@@ -1,4 +1,6 @@
+
 """Global schedule API — all sent + scheduled emails across all campaigns."""
+from app.maintenance import background_work
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -32,6 +34,7 @@ log = logging.getLogger("quickly.schedule")
 router = APIRouter(prefix="/api/schedule", tags=["schedule"])
 
 
+@background_work
 async def run_recalculate_all_in_new_session() -> None:
     """Run a full global recalculate in a fresh session (for background tasks).
 

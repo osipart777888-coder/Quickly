@@ -35,17 +35,33 @@ async def reinitialize_after_restore(background_tasks: BackgroundTasks) -> None:
     background_tasks.add_task(run_recalculate_all_in_new_session)
 
 
-async def restore_database_from_bytes(raw: bytes, background_tasks: BackgroundTasks) -> None:
-    """Close the pool, pg_restore from upload bytes, then migrate and recalculate."""
+async def _restore(restore,background_tasks):
+    import asyncio
     async with exclusive_restore():
         await engine.dispose()
-        await restore_from_upload_to_thread(db_url, raw)
-        await reinitialize_after_restore(background_tasks)
+        activation=None
+        try:
+            activation=await restore()
+            await reinitialize_after_restore(background_tasks)
+            from app.models import User
+            from sqlalchemy import select
+            async with AsyncSessionLocal() as db:
+                if not await db.scalar(select(User.id).where(User.role=='admin',User.is_active==True).limit(1)):
+                    raise RuntimeError('После восстановления недоступен администратор')
+            if activation:await asyncio.to_thread(activation.confirm)
+        except BaseException:
+            await engine.dispose()
+            if activation:await asyncio.shield(asyncio.to_thread(activation.rollback))
+            # Reopen the retained original database without changing its control flags or queue.
+            async with AsyncSessionLocal() as db:
+                await reload_settings(db)
+            background_tasks.tasks.clear()
+            raise
+
+
+async def restore_database_from_bytes(raw: bytes, background_tasks: BackgroundTasks) -> None:
+    await _restore(lambda:restore_from_upload_to_thread(db_url,raw),background_tasks)
 
 
 async def restore_database_from_path(dump_path: Path, background_tasks: BackgroundTasks) -> None:
-    """Close the pool, pg_restore from a decrypted custom-format file, then migrate."""
-    async with exclusive_restore():
-        await engine.dispose()
-        await restore_from_path_to_thread(db_url, dump_path)
-        await reinitialize_after_restore(background_tasks)
+    await _restore(lambda:restore_from_path_to_thread(db_url,dump_path),background_tasks)

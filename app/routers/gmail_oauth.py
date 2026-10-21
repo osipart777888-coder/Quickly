@@ -571,7 +571,7 @@ async def generate_connect_url_new_inbox(
 
     base = settings.base_url.rstrip("/")
     url = f"{base}/oauth/connect/{token}"
-    log.info("generate_connect_url (new): token=%s… provider=%s", token[:12], data.provider)
+    log.info("generate_connect_url (new): provider=%s", data.provider)
     return ConnectUrlResponse(url=url)
 
 
@@ -622,7 +622,7 @@ async def oauth_connect_redirect(
 
         pending.used = True
         await db.flush()
-        log.info("oauth_connect_redirect: new inbox (token=%s…)", token[:12])
+        log.info("oauth_connect_redirect: new inbox")
 
         metadata = json.loads(pending.metadata_json)
         provider = metadata["provider"]

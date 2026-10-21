@@ -131,12 +131,19 @@ class EncryptedText(TypeDecorator):
     def process_bind_param(self, value, dialect):
         if value is None:
             return value
+        if type(self) is EncryptedText:
+            from app.log_redaction import register_secret
+            register_secret(value)
         return encrypt(value)
 
     def process_result_value(self, value, dialect):
         if value is None:
             return value
-        return decrypt(value)
+        plaintext=decrypt(value)
+        if type(self) is EncryptedText:
+            from app.log_redaction import register_secret
+            register_secret(plaintext)
+        return plaintext
 
 
 class LocalSettingsText(EncryptedText):

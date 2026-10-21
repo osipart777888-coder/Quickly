@@ -8,6 +8,7 @@ import csv
 import io
 import json
 import logging
+from app.maintenance import create_background_task
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -2229,7 +2230,7 @@ async def bulk_add_leads_to_campaign(
     # Trigger background email verification if requested
     if verify_emails and added_lead_ids:
         import asyncio
-        asyncio.create_task(_run_background_verification(added_lead_ids))
+        create_background_task(_run_background_verification(added_lead_ids))
 
     # When provider matching is disabled, still detect providers in the background
     # for leads that don't have one yet (future use / analytics).
@@ -2237,7 +2238,7 @@ async def bulk_add_leads_to_campaign(
         needs_bg = [(lead_id, email) for _, lead_id, email, has_prov, _ in new_enrollments if not has_prov]
         if needs_bg:
             import asyncio
-            asyncio.create_task(_detect_providers_background(needs_bg))
+            create_background_task(_detect_providers_background(needs_bg))
 
     return {
         "ok": True,
@@ -2517,7 +2518,7 @@ async def trigger_verification_for_campaign(
         }
 
     import asyncio
-    asyncio.create_task(_run_background_verification(lead_ids, reverify=reverify))
+    create_background_task(_run_background_verification(lead_ids, reverify=reverify))
     return {"ok": True, "queued": len(lead_ids), "needs_reverify": False, "total_verified": total_verified}
 
 
@@ -2939,7 +2940,7 @@ async def import_campaign_leads(
     # Trigger background email verification if requested
     if verify_emails and added_lead_ids_csv:
         import asyncio
-        asyncio.create_task(_run_background_verification(added_lead_ids_csv))
+        create_background_task(_run_background_verification(added_lead_ids_csv))
 
     # When provider matching is disabled, still detect providers in the background
     # for leads that don't have one yet (future use / analytics).
@@ -2947,7 +2948,7 @@ async def import_campaign_leads(
         needs_bg = [(lead_id, email) for _, lead_id, email, has_prov, _ in new_enrollments if not has_prov]
         if needs_bg:
             import asyncio
-            asyncio.create_task(_detect_providers_background(needs_bg))
+            create_background_task(_detect_providers_background(needs_bg))
 
     return {
         "ok": True,
@@ -2987,6 +2988,6 @@ async def detect_campaign_lead_providers(
 
     if pairs:
         import asyncio
-        asyncio.create_task(_detect_providers_background(pairs))
+        create_background_task(_detect_providers_background(pairs))
 
     return {"ok": True, "queued": len(pairs)}

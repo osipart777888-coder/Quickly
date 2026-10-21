@@ -81,7 +81,7 @@ def _restore_strict(database_url, path, *, clean=False):
         raise BackupToolError(error or 'PostgreSQL restore failed; transaction rolled back')
 
 
-def _verify_restored_database(uri):
+def _verify_restored_database(uri, *, require_admin=True):
     import psycopg2
     from psycopg2 import sql
     from app.database import Base
@@ -93,7 +93,7 @@ def _verify_restored_database(uri):
             if not cursor.fetchone()[0]:
                 raise BackupToolError('Копия не содержит таблицу пользователей Quickly')
             cursor.execute("SELECT count(*) FROM app_user WHERE role='admin' AND is_active=TRUE")
-            if not cursor.fetchone()[0]:
+            if not cursor.fetchone()[0] and require_admin:
                 raise BackupToolError('В копии отсутствует активный администратор')
             if os.getenv('QUICKLY_REQUIRE_EXTERNAL_KEYS','').lower() == 'true':
                 cursor.execute("SELECT table_name,column_name FROM information_schema.columns WHERE table_schema='public'")
@@ -108,55 +108,12 @@ def _verify_restored_database(uri):
                                     decrypt(row[0])  # Reject a foreign encryption key before touching the live DB.
 
 
-def pg_restore_replace(database_url: str, dump_path: str | Path) -> None:
-    """Validate in a temporary DB, retain a snapshot, then replace in one transaction."""
+def pg_restore_replace(database_url: str, dump_path: str | Path, *, defer_confirmation=False):
+    """Prepare/migrate a new DB, atomically swap names and retain the previous DB."""
     if not is_postgresql_url(database_url):
         raise BackupUnsupportedError('Restore requires PostgreSQL')
-    import uuid
-    import psycopg2
-    from psycopg2 import sql
-    from sqlalchemy.engine import make_url
-    url = make_url(sync_connection_uri(database_url))
-    candidate = 'quickly_restore_preflight_'+uuid.uuid4().hex[:20]
-    admin_uri = url.set(database='postgres').render_as_string(hide_password=False)
-    candidate_uri = url.set(database=candidate).render_as_string(hide_password=False)
-    created = False
-    try:
-        admin = psycopg2.connect(admin_uri)
-        admin.autocommit = True
-        try:
-            with admin.cursor() as cursor:
-                cursor.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(candidate)))
-                created = True
-        finally:
-            admin.close()
-        _restore_strict(candidate_uri,dump_path)
-        _verify_restored_database(candidate_uri)
-        recovery = Path.cwd()/'backups' if local_disk_backups_enabled() else Path(tempfile.gettempdir())/'quickly-recovery'
-        recovery.mkdir(parents=True,exist_ok=True,mode=0o700)
-        snapshot = recovery/('quickly-before-restore-'+uuid.uuid4().hex+'.dump')
-        previous = pg_dump_custom(database_url)
-        descriptor = os.open(snapshot,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-        with os.fdopen(descriptor,'wb') as target:
-            target.write(previous)
-        _restore_strict(database_url,dump_path,clean=True)
-        log.warning('Restore completed; previous database snapshot retained at %s',snapshot)
-    except BackupError:
-        raise
-    except Exception as exc:
-        raise BackupToolError('Копия не активирована: '+str(exc)) from exc
-    finally:
-        if created:
-            try:
-                admin = psycopg2.connect(admin_uri)
-                admin.autocommit = True
-                try:
-                    with admin.cursor() as cursor:
-                        cursor.execute(sql.SQL('DROP DATABASE {} WITH (FORCE)').format(sql.Identifier(candidate)))
-                finally:
-                    admin.close()
-            except Exception:
-                log.exception('Could not remove restore preflight database %s',candidate)
+    from app.restore_safety import activate_dump
+    return activate_dump(database_url,dump_path,defer_confirmation=defer_confirmation)
 
 
 def local_disk_backups_enabled() -> bool:
@@ -247,8 +204,18 @@ async def dump_to_thread(database_url: str) -> bytes:
     return await asyncio.to_thread(pg_dump_custom, database_url)
 
 
-async def restore_from_path_to_thread(database_url: str, path: str | Path) -> None:
-    await asyncio.to_thread(pg_restore_replace, database_url, path)
+async def _restore_thread(function):
+    task=asyncio.create_task(asyncio.to_thread(function))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        activation=await task
+        if activation:await asyncio.to_thread(activation.rollback)
+        raise
+
+
+async def restore_from_path_to_thread(database_url: str, path: str | Path):
+    return await _restore_thread(lambda:pg_restore_replace(database_url,path,defer_confirmation=True))
 
 
 def validate_custom_format_dump_file(path: str | Path) -> None:
@@ -291,11 +258,11 @@ async def restore_from_upload_to_thread(database_url: str, raw: bytes) -> None:
             tmp.write(raw)
             tmp_path = tmp.name
         try:
-            pg_restore_replace(database_url, tmp_path)
+            return pg_restore_replace(database_url, tmp_path, defer_confirmation=True)
         finally:
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
 
-    await asyncio.to_thread(_run)
+    return await _restore_thread(_run)
