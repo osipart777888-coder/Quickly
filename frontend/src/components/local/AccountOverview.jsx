@@ -19,7 +19,7 @@ export default function AccountOverview({compact=false}) {
       <td className="p-2">{a.paused?'Paused':a.connected?'Configured':'Not connected'}</td><td className="p-2">{a.effective_limit} / {a.max_emails_per_day}{a.ramp_up_enabled&&<span className="block text-xs">Ramp-up enabled</span>}</td>
       <td className="p-2">{a.sent_today}</td><td className="p-2">{a.attempts_today}</td><td className="p-2">{a.smtp_status}</td><td className="p-2">{a.imap_status}</td><td className="p-2">{a.reply_count}</td>
       <td className="p-2">{a.last_success_at?new Date(a.last_success_at+'Z').toLocaleString():'—'}</td><td className="p-2 max-w-xs whitespace-normal text-red-700">{a.last_error || '—'}</td>
-      <td className="p-2"><button disabled={busy===a.id} className="rounded border px-2 py-1" onClick={()=>test(a.id,a.provider)}>{busy===a.id?'Checking…':'Test connection'}</button></td>
+      <td className="p-2"><button disabled={busy!==null} className="rounded border px-2 py-1 disabled:cursor-not-allowed disabled:opacity-60" onClick={()=>test(a.id,a.provider)}>{busy===a.id?'Checking…':'Test connection'}</button></td>
     </tr>)}</tbody></table>{!data.accounts.length&&<p className="py-6 text-center text-gray-500">No sending accounts yet. Add your own mailboxes below.</p>}</div>
     {!compact&&<p className="text-xs text-gray-500">A connection test checks credentials and transport without sending a message. Configure each daily limit within your provider's rules.</p>}
   </section>;

@@ -12,6 +12,7 @@ import logging
 import smtplib
 import socket
 import ssl
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from email import policy as _email_policy
@@ -412,9 +413,66 @@ def test_imap_connection(account, timeout: float = 15.0) -> SmtpTestResult:
     return SmtpTestResult(ok=True, detail="IMAP login + INBOX select succeeded")
 
 
-def test_account_connections(account, timeout: float = 15.0) -> tuple[SmtpTestResult, SmtpTestResult]:
-    """Test SMTP and (when configured) IMAP; returns ``(smtp_result, imap_result)``."""
-    return test_smtp_connection(account, timeout=timeout), test_imap_connection(account, timeout=timeout)
+def _transient_test_failure(result: SmtpTestResult) -> bool:
+    """Return whether a failed probe is safe and useful to retry once.
+
+    Large providers occasionally delay or reset a TLS handshake when several
+    accounts are checked one after another.  Authentication and certificate
+    failures are deterministic and must be shown immediately; retrying those
+    only creates extra logins and hides the real configuration error.
+    """
+    if result.ok:
+        return False
+    error = (result.error or "").lower()
+    return any(
+        marker in error
+        for marker in (
+            "timed out",
+            "timeout",
+            "connection reset",
+            "remote end closed connection",
+            "unexpected eof",
+            "eof occurred",
+            "temporarily unavailable",
+        )
+    )
+
+
+def _test_with_transient_retry(test, account, *, timeout: float, protocol: str) -> SmtpTestResult:
+    """Run one connection probe and retry a transient transport failure once."""
+    result = test(account, timeout=timeout)
+    if not _transient_test_failure(result):
+        return result
+
+    inbox_id = getattr(account, "inbox_id", None)
+    log.info("%s connection probe timed out/reset; retrying once inbox_id=%s", protocol, inbox_id)
+    # Give the provider time to release its TLS/login admission slot.  This
+    # runs in the dedicated mail thread, never on FastAPI's event loop.
+    time.sleep(1.5)
+    return test(account, timeout=timeout)
+
+
+def test_account_connections(account, timeout: float | None = None) -> tuple[SmtpTestResult, SmtpTestResult]:
+    """Test SMTP and IMAP with one retry for transient transport failures.
+
+    The manual UI check does not send a message.  A slightly larger timeout
+    than the background sync default avoids reporting a mailbox as broken only
+    because a provider completed a TLS handshake slowly.
+    """
+    effective_timeout = timeout or smtp_timeout_seconds(default=25.0)
+    smtp_result = _test_with_transient_retry(
+        test_smtp_connection,
+        account,
+        timeout=effective_timeout,
+        protocol="SMTP",
+    )
+    imap_result = _test_with_transient_retry(
+        test_imap_connection,
+        account,
+        timeout=effective_timeout,
+        protocol="IMAP",
+    )
+    return smtp_result, imap_result
 
 
 def parse_imap_message(raw: bytes) -> dict:

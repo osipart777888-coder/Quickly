@@ -137,6 +137,62 @@ def test_sanitize_connection_error():
         "Connection failed (details in server logs)"
 
 
+def test_account_connection_retries_transient_timeout_once(monkeypatch):
+    from app import smtp_utils
+
+    calls = {"smtp": 0, "imap": 0}
+    sleeps = []
+
+    def fake_smtp(account, timeout):
+        calls["smtp"] += 1
+        if calls["smtp"] == 1:
+            return smtp_utils.SmtpTestResult(False, "SMTP connection failed: handshake timed out")
+        return smtp_utils.SmtpTestResult(True, detail="SMTP ok")
+
+    def fake_imap(account, timeout):
+        calls["imap"] += 1
+        return smtp_utils.SmtpTestResult(True, detail="IMAP ok")
+
+    monkeypatch.setattr(smtp_utils, "test_smtp_connection", fake_smtp)
+    monkeypatch.setattr(smtp_utils, "test_imap_connection", fake_imap)
+    monkeypatch.setattr(smtp_utils.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    smtp_result, imap_result = smtp_utils.test_account_connections(object(), timeout=3)
+
+    assert smtp_result.ok is True
+    assert imap_result.ok is True
+    assert calls == {"smtp": 2, "imap": 1}
+    assert sleeps == [1.5]
+
+
+def test_account_connection_does_not_retry_authentication_failure(monkeypatch):
+    from app import smtp_utils
+
+    calls = {"smtp": 0}
+
+    def fake_smtp(account, timeout):
+        calls["smtp"] += 1
+        return smtp_utils.SmtpTestResult(False, "SMTP authentication failed: 535 bad credentials")
+
+    monkeypatch.setattr(smtp_utils, "test_smtp_connection", fake_smtp)
+    monkeypatch.setattr(
+        smtp_utils,
+        "test_imap_connection",
+        lambda account, timeout: smtp_utils.SmtpTestResult(True, detail="IMAP ok"),
+    )
+    monkeypatch.setattr(
+        smtp_utils.time,
+        "sleep",
+        lambda seconds: (_ for _ in ()).throw(AssertionError("must not sleep")),
+    )
+
+    smtp_result, imap_result = smtp_utils.test_account_connections(object(), timeout=3)
+
+    assert smtp_result.ok is False
+    assert imap_result.ok is True
+    assert calls["smtp"] == 1
+
+
 def test_normalise_message_id():
     assert normalise_message_id("abc@x.com") == "<abc@x.com>"
     assert normalise_message_id("<abc@x.com>") == "<abc@x.com>"
