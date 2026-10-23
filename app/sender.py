@@ -1312,6 +1312,30 @@ def _send_via_smtp(
                     client.close()
                 except Exception:
                     pass
+        # SMTP acceptance is the delivery result.  A best-effort IMAP copy is
+        # useful for providers that do not automatically populate Sent, but a
+        # missing Sent folder, duplicate, timeout, or APPEND rejection must
+        # never turn an accepted send into a failure.
+        try:
+            from app.mailbox_client import append_sent_copy
+
+            appended = append_sent_copy(
+                smtp_account,
+                raw_bytes,
+                message_id=message_id,
+                sent_at=time_provider.utcnow(),
+            )
+            log.info(
+                "SMTP sent-copy result inbox_id=%s appended_or_present=%s",
+                getattr(smtp_account, "inbox_id", None),
+                appended,
+            )
+        except Exception:
+            log.warning(
+                "SMTP accepted but IMAP sent-copy could not be saved inbox_id=%s",
+                getattr(smtp_account, "inbox_id", None),
+                exc_info=True,
+            )
         _log_smtp_call(
             to_email, from_email, subject,
             thread_id=thread_key,

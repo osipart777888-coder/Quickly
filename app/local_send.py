@@ -6,6 +6,7 @@ A committed reservation with an unknown result is deliberately never retried.
 from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
+import logging
 import os
 import uuid
 from app.mail_io import bounded_io, await_thread
@@ -17,6 +18,9 @@ from app.models import EmailLog, Lead, Campaign, AppSetting
 from app.queue_logic import compute_effective_daily_limit
 from app.sender import SendFailure, SendResult
 from app.time import utcnow
+
+
+log = logging.getLogger("quickly.local_send")
 
 
 def local_install() -> bool:
@@ -226,6 +230,32 @@ async def guarded_send(db, inbox, *, operation_key=None, kind='manual', lead=Non
     if isinstance(result, SendResult) or result is True:
         operation.status = 'accepted'
         operation.message_id = getattr(result, 'message_id', '') or ''
+        # Keep every accepted SMTP message available in the local mailbox,
+        # including diagnostics and manual test sends.  Campaign and Unibox
+        # callers may upsert the same Message-ID again; the helper is
+        # idempotent.  A mirror failure must not change the accepted result.
+        if isinstance(result, SendResult) and getattr(inbox, 'provider', '') == 'smtp':
+            try:
+                async with db.begin_nested():
+                    from app.unibox import upsert_sent_smtp_message
+
+                    await upsert_sent_smtp_message(
+                        db,
+                        inbox_id=inbox.id,
+                        thread_key=result.thread_id or result.message_id,
+                        internet_message_id=result.message_id,
+                        subject=kwargs.get('subject', '') or '',
+                        to_email=kwargs.get('to_email', '') or '',
+                        from_email=kwargs.get('from_email', '') or inbox.email or '',
+                        body=kwargs.get('body', '') or '',
+                        is_html=bool(kwargs.get('is_html', False)),
+                    )
+            except Exception:
+                log.warning(
+                    "SMTP accepted but local sent copy could not be saved inbox_id=%s",
+                    inbox.id,
+                    exc_info=True,
+                )
     elif isinstance(result, SendFailure):
         operation.status = 'rejected'
         operation.error = result.message[:2000]

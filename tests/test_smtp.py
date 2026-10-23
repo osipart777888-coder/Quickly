@@ -210,6 +210,7 @@ def _smtp_account(**overrides):
 def test_send_via_smtp_ok(monkeypatch):
     fake = _FakeSMTP("ok")
     monkeypatch.setattr("app.smtp_utils._smtp_connect", lambda account, timeout=30: fake)
+    monkeypatch.setattr("app.mailbox_client.append_sent_copy", lambda *args, **kwargs: False)
     acct = _smtp_account()
     res = sender_mod._send_via_smtp(
         to_email="lead@example.com",
@@ -223,6 +224,24 @@ def test_send_via_smtp_ok(monkeypatch):
     # New thread: thread key equals our own Message-ID.
     assert res.thread_id == res.message_id
     assert fake.sent and fake.sent[0][1] == ["lead@example.com"]
+
+
+def test_send_success_survives_sent_copy_failure(monkeypatch):
+    fake = _FakeSMTP("ok")
+    monkeypatch.setattr("app.smtp_utils._smtp_connect", lambda account, timeout=30: fake)
+
+    def broken_append(*args, **kwargs):
+        raise OSError("IMAP unavailable")
+
+    monkeypatch.setattr("app.mailbox_client.append_sent_copy", broken_append)
+    result = sender_mod._send_via_smtp(
+        to_email="lead@example.com",
+        subject="Hi",
+        body="Hello",
+        from_email="me@mydomain.com",
+        smtp_account=_smtp_account(),
+    )
+    assert isinstance(result, sender_mod.SendResult)
 
 
 def test_send_via_smtp_thread_key_from_references(monkeypatch):

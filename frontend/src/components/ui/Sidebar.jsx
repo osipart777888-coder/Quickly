@@ -13,6 +13,7 @@ import {
   RiHeartPulseLine,
   RiContactsLine,
   RiNotification3Line,
+  RiMailOpenLine,
 } from 'react-icons/ri';
 import { useUniboxNotifications } from '../../context/UniboxNotificationsContext';
 import { useNotifications } from '../../context/NotificationsContext';
@@ -28,6 +29,7 @@ const links = [
   { to: '/campaigns', label: 'Campaigns', icon: <RiSendPlaneLine size={20} /> },
   { to: '/leads', label: 'Contacts', icon: <RiContactsLine size={20} /> },
   { to: '/inboxes', label: 'Sending accounts', icon: <RiMailLine size={20} /> },
+  { to: '/mail', label: 'Почта', icon: <RiMailOpenLine size={20} /> },
   { to: '/unibox', label: 'Unified inbox', icon: <RiInboxLine size={20} /> },
   { to: '/schedule', label: 'Schedule', icon: <RiCalendarScheduleLine size={20} /> },
   { to: '/notifications', label: 'Notifications', icon: <RiNotification3Line size={20} /> },

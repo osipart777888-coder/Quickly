@@ -51,6 +51,7 @@ from app.routers import notices as notices_router
 from app.routers import system_health as system_health_router
 from app.routers import analytics as analytics_router
 from app.routers import local as local_router
+from app.routers import mailbox as mailbox_router
 from app.jobs import run_send_job, run_slot_scan_job, last_send_job_run, last_send_job_sent_count, run_telemetry_heartbeat_job
 from app.unibox import queue_sync_for_all_inboxes, run_unibox_sync_job
 from app import time as time_provider
@@ -310,6 +311,7 @@ app.include_router(notices_router.router, dependencies=_auth_deps)
 app.include_router(system_health_router.router, dependencies=_auth_deps)
 app.include_router(analytics_router.router, dependencies=_auth_deps)
 app.include_router(local_router.router, dependencies=_auth_deps)
+app.include_router(mailbox_router.router, dependencies=_auth_deps)
 
 # lightweight public utility for MX-based provider detection
 app.include_router(email_provider_router.router)

@@ -33,6 +33,47 @@ function sanitizeHtml(html) {
   });
 }
 
+/** Remove URLs that would be fetched automatically while an email is opened. */
+function removeExternalResources(sanitizedHtml) {
+  if (!sanitizedHtml) return sanitizedHtml;
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(`<div id="__mail_root">${sanitizedHtml}</div>`, 'text/html');
+    const root = doc.getElementById('__mail_root');
+    const inlineResource = /^(?:data:|cid:)/i;
+
+    root.querySelectorAll('style').forEach(node => node.remove());
+    root.querySelectorAll('img, source, video, audio, input, image, use, feImage').forEach(node => {
+      ['src', 'srcset', 'poster', 'background'].forEach(attr => {
+        const value = node.getAttribute(attr) || '';
+        // srcset can mix inline and remote candidates, so remove it entirely.
+        // Other automatic resource attributes keep only inline data/cid URLs.
+        if (value && (attr === 'srcset' || !inlineResource.test(value.trim()))) {
+          node.removeAttribute(attr);
+          node.setAttribute('data-quickly-external-blocked', '1');
+        }
+      });
+      // SVG <image> can load through href/xlink:href.
+      ['href', 'xlink:href'].forEach(attr => {
+        const value = node.getAttribute(attr) || '';
+        if (value && !inlineResource.test(value.trim()) && !value.trim().startsWith('#')) {
+          node.removeAttribute(attr);
+        }
+      });
+    });
+    root.querySelectorAll('[background]').forEach(node => node.removeAttribute('background'));
+    root.querySelectorAll('[style]').forEach(node => {
+      const value = node.getAttribute('style') || '';
+      // Avoid a permissive CSS URL parser: a style containing url() is
+      // discarded, while ordinary formatting remains available.
+      if (/url\s*\(/i.test(value)) node.removeAttribute('style');
+    });
+    return root.innerHTML;
+  } catch {
+    return sanitizedHtml;
+  }
+}
+
 /**
  * Strip Quickly tracking artefacts from HTML:
  * 1. Remove <img> tags whose src contains /o/ (open tracking pixels).
@@ -108,7 +149,7 @@ function collapseGmailQuotes(sanitizedHtml) {
 }
 
 
-function EmailContent({ html, stripTracking }) {
+function EmailContent({ html, stripTracking, blockExternalResources = false }) {
   const hostRef = useRef(null);
   const shadowRootRef = useRef(null);
 
@@ -122,7 +163,8 @@ function EmailContent({ html, stripTracking }) {
       processed = stripTrackingFromHtml(processed);
     }
     const sanitized = sanitizeHtml(processed);
-    const withCollapsed = collapseGmailQuotes(sanitized);
+    const resourceSafe = blockExternalResources ? removeExternalResources(sanitized) : sanitized;
+    const withCollapsed = collapseGmailQuotes(resourceSafe);
 
     // The shadow root already keeps our app's CSS out of the email,
     // so a full "all: initial" reset is unnecessary and strips font
@@ -169,7 +211,7 @@ function EmailContent({ html, stripTracking }) {
     `;
 
     shadowRootRef.current.innerHTML = content;
-  }, [html, stripTracking]);
+  }, [html, stripTracking, blockExternalResources]);
 
   return <div ref={hostRef} className="email-content" />;
 }

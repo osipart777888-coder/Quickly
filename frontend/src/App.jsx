@@ -12,6 +12,7 @@ import Schedule from './pages/Schedule';
 import Settings from './pages/Settings';
 import Analytics from './pages/Analytics';
 import Unibox from './pages/Unibox';
+import Mail from './pages/Mail';
 import DeliverabilityTips from './pages/DeliverabilityTips';
 import SystemHealth from './pages/SystemHealth';
 import Leads from './pages/Leads';
@@ -69,6 +70,7 @@ function AppRoutes() {
               <Route path="/leads/:id" element={<LeadDetail />} />
               <Route path="/inboxes" element={<Inboxes />} />
               <Route path="/unibox" element={<Unibox />} />
+              <Route path="/mail" element={<Mail />} />
               <Route path="/schedule" element={<Schedule />} />
               <Route path="/analytics" element={<Analytics />} />
               <Route path="/settings" element={<Settings />} />

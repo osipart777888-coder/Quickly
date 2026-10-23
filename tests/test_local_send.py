@@ -3,7 +3,7 @@ import pytest
 from sqlalchemy import func, select
 from app.local_models import MailOperation, SenderDayQuota, SendControl, Suppression
 from app.local_send import guarded_send, reserve_operation
-from app.models import Inbox, Lead, Campaign
+from app.models import Inbox, Lead, Campaign, SmtpMessage
 from app.sender import SendResult
 
 
@@ -32,6 +32,34 @@ async def test_five_attempt_limit_includes_diagnostics_and_manual_tests(session)
     assert len(sent) == 5
     assert await session.scalar(select(func.count(MailOperation.id))) == 5
     assert await session.scalar(select(SenderDayQuota.used)) == 5
+
+
+@pytest.mark.asyncio
+async def test_accepted_smtp_send_is_saved_in_local_mailbox(session):
+    inbox = await account(session)
+    result = await guarded_send(
+        session,
+        inbox,
+        operation_key='saved-smtp-copy',
+        kind='test',
+        send=lambda **kwargs: SendResult('<saved@local.test>', '<saved@local.test>'),
+        to_email='receiver@local.test',
+        from_email=inbox.email,
+        subject='Saved subject',
+        body='Saved body',
+        is_html=False,
+    )
+    assert isinstance(result, SendResult)
+    row = await session.scalar(
+        select(SmtpMessage).where(
+            SmtpMessage.inbox_id == inbox.id,
+            SmtpMessage.rfc_message_id == '<saved@local.test>',
+        )
+    )
+    assert row is not None
+    assert row.direction == 'sent'
+    assert row.subject == 'Saved subject'
+    assert row.body_plain == 'Saved body'
 
 
 @pytest.mark.asyncio
