@@ -50,8 +50,15 @@ async def local_parser_status(db=Depends(get_db)):
     linked = {}
     for job in jobs:
         if job.params.get('parser_run') and job.params['parser_run'] not in linked:
-            linked[job.params['parser_run']] = job.id
-    return {**state, 'runs': [{**run, 'job_id': linked.get(run['id'])} for run in runs]}
+            linked[job.params['parser_run']] = job
+    progress = await bridge.email_progress(db, [j.id for key, j in linked.items() if key in {r['id'] for r in runs}])
+    result = []
+    for run in runs:
+        job = linked.get(run['id'])
+        result.append({**run, 'job_id': job.id if job else None, 'email_status': job.status if job else None,
+                       'email_progress': progress.get(job.id) if job else None})
+    result.sort(key=lambda run: (not run.get('saved'), run.get('created', 0)), reverse=True)
+    return {**state, 'runs': result}
 
 
 @router.get('/local-parser/catalog')

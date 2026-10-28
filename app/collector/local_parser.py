@@ -6,12 +6,35 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
-from app.collector.models import CollectionJob
+from app.collector.models import CollectionJob, CollectionResult, CollectionTask, CompanyContact
 from app.collector.websites import SourceError
 
 LOCAL_SOURCES = {'local_yandex', 'local_2gis', 'local_spark', 'local_rusprofile'}
+
+
+async def email_progress(db, job_ids):
+    """Show persisted website/enrichment results, not just browser-card counts."""
+    if not job_ids: return {}
+    result = {job_id: {'companies': 0, 'unique_emails': 0, 'with_email': 0, 'websites': {}} for job_id in job_ids}
+    query = select(CollectionResult.job_id,
+        func.count(func.distinct(CollectionResult.company_id)),
+        func.count(func.distinct(CompanyContact.value)).filter(CompanyContact.kind == 'email'),
+        func.count(func.distinct(CompanyContact.company_id)).filter(CompanyContact.kind == 'email'))
+    query = query.outerjoin(CompanyContact, CompanyContact.company_id == CollectionResult.company_id).where(
+        CollectionResult.job_id.in_(job_ids)).group_by(CollectionResult.job_id)
+    for job_id, companies, emails, with_email in (await db.execute(query)).all():
+        result[job_id].update(companies=companies, unique_emails=emails, with_email=with_email)
+    for job_id, status, count in (await db.execute(select(CollectionTask.job_id, CollectionTask.status, func.count())
+            .where(CollectionTask.job_id.in_(job_ids), CollectionTask.kind == 'website')
+            .group_by(CollectionTask.job_id, CollectionTask.status))).all():
+        result[job_id]['websites'][status] = count
+    for item in result.values():
+        item['sites_pending'] = sum(item['websites'].get(s, 0) for s in ['pending', 'running', 'retry'])
+        item['sites_checked'] = item['websites'].get('done', 0)
+        item['sites_failed'] = item['websites'].get('error', 0)
+    return result
 
 
 def connection():

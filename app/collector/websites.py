@@ -152,37 +152,70 @@ def get_json(url, params):
 
 
 class ContactHTMLParser(HTMLParser):
+    VOID = {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'}
+    EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}")
+
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.links, self.texts, self.mailtos, self.phones, self.forms = [], [], [], [], []
-        self.hidden = 0
-        self.current_href = ''
+        self.hidden, self.stack = 0, []
+        self.current_href, self.anchor_mails, self.anchor_text = '', [], ''
+        self.email_texts, self.conflicting_labels = [], []
+
+    def close_anchor(self):
+        visible = self.EMAIL.findall(self.anchor_text)
+        # Conflicting href/label pairs need corroboration from another contact
+        # or the company's domain; copied templates often contain both values.
+        if visible and self.anchor_mails and set(map(str.lower, visible)) != set(map(str.lower, self.anchor_mails)):
+            self.conflicting_labels.extend(visible)
+        else:
+            self.mailtos.extend(visible or self.anchor_mails)
+        self.current_href, self.anchor_mails, self.anchor_text = '', [], ''
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
-        if tag in {'script', 'style', 'noscript', 'template'}:
-            self.hidden += 1
+        classes = set((attrs.get('class') or '').lower().split())
+        style = re.sub(r'\s+', '', attrs.get('style') or '').lower()
+        own_hidden = (tag in {'script', 'style', 'noscript', 'template'} or 'hidden' in attrs
+            or (attrs.get('aria-hidden') or '').lower() == 'true'
+            or 'display:none' in style or 'visibility:hidden' in style
+            or bool(classes & {'hidden', 'd-none', 'is-hidden'})
+            or ('modal' in classes and not classes & {'show', 'in'}))
+        if tag not in self.VOID:
+            self.stack.append((tag, own_hidden))
+            self.hidden += int(own_hidden)
+        if self.hidden or own_hidden: return
         if tag == 'a':
-            href = attrs.get('href', '')
+            self.close_anchor()
+            href = attrs.get('href') or ''
             self.current_href = href
             self.links.append((href, ''))
             if href.lower().startswith('mailto:'):
-                self.mailtos.extend(re.split('[,;]', unquote(href[7:].split('?')[0])))
+                self.anchor_mails = re.split('[,;]', unquote(href[7:].split('?')[0]))
             if href.lower().startswith('tel:'):
                 self.phones.append(unquote(href[4:]))
-        if tag == 'form':
-            self.forms.append(attrs.get('action', ''))
+        if tag == 'form': self.forms.append(attrs.get('action') or '')
+        encoded = attrs.get('data-cfemail')
+        if encoded:
+            try:
+                data = bytes.fromhex(encoded)
+                self.mailtos.append(bytes(b ^ data[0] for b in data[1:]).decode())
+            except (ValueError, IndexError, UnicodeError): pass
 
     def handle_endtag(self, tag):
-        if tag in {'script', 'style', 'noscript', 'template'}:
-            self.hidden = max(0, self.hidden - 1)
-        if tag == 'a':
-            self.current_href = ''
+        if tag == 'a' and not self.hidden: self.close_anchor()
+        for index in range(len(self.stack) - 1, -1, -1):
+            if self.stack[index][0] == tag:
+                self.hidden -= sum(int(blocked) for _, blocked in self.stack[index:])
+                del self.stack[index:]
+                break
 
     def handle_data(self, data):
         if not self.hidden:
             self.texts.append(data)
+            if not self.current_href: self.email_texts.append(data)
             if self.current_href and self.links:
+                self.anchor_text += data
                 href, label = self.links[-1]
                 self.links[-1] = (href, label + data)
 
@@ -190,8 +223,11 @@ class ContactHTMLParser(HTMLParser):
 def parse_contacts(page):
     parser = ContactHTMLParser()
     parser.feed(page.text)
+    parser.close_anchor()
     text = ' '.join(parser.texts)
-    emails = parser.mailtos + re.findall(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}", text)
+    emails = parser.mailtos + parser.EMAIL.findall(' '.join(parser.email_texts))
+    domains = {value.rsplit('@', 1)[-1].lower() for value in emails if '@' in value} | {domain_of(page.url)}
+    emails += [value for value in parser.conflicting_labels if value in emails or value.rsplit('@', 1)[-1].lower() in domains]
     phones = parser.phones + re.findall(r'(?:\+7|8)[\s(-]*\d{3}[\s)-]*\d{3}[\s-]*\d{2}[\s-]*\d{2}', text)
     contacts = []
     for kind, values, validator in [('email', emails, contact_email), ('phone', phones, contact_phone)]:

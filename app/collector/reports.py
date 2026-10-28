@@ -3,6 +3,7 @@ import csv
 import io
 from sqlalchemy import func, select
 from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
 from app.collector.models import Company, CompanyContact, CompanyObservation, CollectorSource, ContactPermission, CollectionJob, CollectionResult
 from app.collector.repository import FIELDS
 
@@ -56,7 +57,15 @@ async def statistics(db, company_ids=None):
             'without_email': total - with_email, 'without_contacts': total - with_contacts}
 
 
-EXPORT_FIELDS = ['id', *FIELDS, 'emails', 'phones', 'sources', 'source_urls', 'checked_at', 'status', 'consent']
+EXPORT_FIELDS = ['emails', 'name', 'phones', 'website', 'city', 'address',
+    *[field for field in FIELDS if field not in {'name', 'website', 'city', 'address'}],
+    'source_urls', 'sources', 'checked_at', 'status', 'consent', 'id']
+EXPORT_LABELS = {'emails': 'Email', 'name': 'Компания', 'phones': 'Телефоны', 'website': 'Сайт',
+    'city': 'Город', 'address': 'Адрес', 'inn': 'ИНН', 'kpp': 'КПП', 'ogrn': 'ОГРН',
+    'okved_main': 'ОКВЭД', 'okved_extra': 'Другие ОКВЭД', 'okved_as_of': 'Дата ОКВЭД',
+    'country': 'Страна', 'region': 'Регион', 'industry': 'Деятельность', 'employees': 'Численность',
+    'active': 'Действующая', 'source_urls': 'Страницы источников', 'sources': 'Источники',
+    'checked_at': 'Дата проверки', 'status': 'Статус', 'consent': 'Согласие', 'id': 'ID'}
 
 
 async def export_bytes(db, companies, format):
@@ -81,7 +90,11 @@ async def export_bytes(db, companies, format):
         return stream.getvalue().encode('utf-8-sig'), omitted
     book = Workbook(write_only=True)
     sheet = book.create_sheet('Компании')
-    sheet.append(EXPORT_FIELDS)
+    sheet.freeze_panes = 'C2'
+    sheet.auto_filter.ref = f'A1:{get_column_letter(len(EXPORT_FIELDS))}{len(rows) + 1}'
+    for column, width in [('A', 48), ('B', 40), ('C', 24), ('D', 36), ('E', 22), ('F', 50)]:
+        sheet.column_dimensions[column].width = width
+    sheet.append([EXPORT_LABELS[field] for field in EXPORT_FIELDS])
     for row in rows: sheet.append(row)
     stream = io.BytesIO()
     book.save(stream)

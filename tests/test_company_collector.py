@@ -180,8 +180,24 @@ async def test_export_neutralizes_formulas_and_xlsx_has_all_contacts(session):
     assert "'=CMD()" in raw.decode('utf-8-sig')
     raw, _ = await export_bytes(session, [company], 'xlsx')
     book = load_workbook(io.BytesIO(raw)); rows = list(book.active.values)
+    assert rows[0][:4] == ('Email', 'Компания', 'Телефоны', 'Сайт')
     assert rows[1][1] == "'=CMD()"
     assert 'office1@test-fixture.ru' in str(rows[1]) and 'sales@test-fixture.ru' in str(rows[1])
+
+
+def test_contact_parser_ignores_hidden_templates_and_prefers_visible_email():
+    from app.collector.websites import parse_contacts
+    page = Page('https://fixture-company.ru/', 200, {}, '''
+        <div class="modal fade"><a href="mailto:template@builder.ru">template@builder.ru</a></div>
+        <div hidden><a href="mailto:hidden@builder.ru">hidden@builder.ru</a></div>
+        <div style="display: none"><span>example@builder.ru</span></div>
+        <template><a href="mailto:sample@builder.ru">sample@builder.ru</a></template>
+        <a href="mailto:wrong@template.ru">office@fixture-company.ru</a>
+        <a href="mailto:sales@fixture-company.ru">Написать нам</a>
+        <div>Прямой контакт direct@fixture-company.ru</div>''')
+    contacts, _ = parse_contacts(page)
+    assert {c['value'] for c in contacts if c['kind'] == 'email'} == {
+        'office@fixture-company.ru', 'sales@fixture-company.ru', 'direct@fixture-company.ru'}
 
 
 @pytest.mark.asyncio

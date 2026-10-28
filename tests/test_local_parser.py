@@ -109,6 +109,16 @@ async def test_import_idempotent_origin_and_unknown_consent(session, monkeypatch
     assert contact.origins[0]['url'] == 'https://fixture-company.ru/contacts'
     assert contact.origins[0]['source'] == 'local_yandex'
     assert (await session.get(ContactPermission, contact.value)).status == 'unknown'
+    progress = await local_parser.email_progress(session, [first['job_id']])
+    assert progress[first['job_id']]['unique_emails'] == 1
+    assert progress[first['job_id']]['with_email'] == 1
+    session.add(CollectionTask(job_id=first['job_id'], task_key='website-fixture', kind='website', source='website',
+                               payload={'company_id': contact.company_id}, status='pending'))
+    await session.flush()
+    progress = await local_parser.email_progress(session, [first['job_id']])
+    assert progress[first['job_id']]['sites_pending'] == 1
+    await session.delete(await session.scalar(select(CollectionTask).where(CollectionTask.task_key == 'website-fixture')))
+    await session.flush()
     from app.collector.reports import export_bytes
     raw, omitted = await export_bytes(session, list((await session.scalars(select(Company))).all()), 'csv')
     assert not omitted and b'office@fixture-company.ru' in raw
