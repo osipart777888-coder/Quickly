@@ -28,6 +28,7 @@ const links = [
   { to: '/analytics', label: 'Analytics', icon: <RiLineChartLine size={20} /> },
   { to: '/campaigns', label: 'Campaigns', icon: <RiSendPlaneLine size={20} /> },
   { to: '/leads', label: 'Contacts', icon: <RiContactsLine size={20} /> },
+  { to: '/companies', label: 'Сбор компаний', icon: <RiContactsLine size={20} /> },
   { to: '/inboxes', label: 'Sending accounts', icon: <RiMailLine size={20} /> },
   { to: '/mail', label: 'Почта', icon: <RiMailOpenLine size={20} /> },
   { to: '/unibox', label: 'Unified inbox', icon: <RiInboxLine size={20} /> },

@@ -967,3 +967,4 @@ WEBHOOK_EVENT_TYPES = [
 
 # Local-install extension tables share the existing PostgreSQL database.
 from app import local_models as _local_models  # noqa: E402,F401
+from app.collector import models as _collector_models  # noqa: E402,F401

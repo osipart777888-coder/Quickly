@@ -49,6 +49,14 @@ async def contact_send_error(db, email, lead=None):
         return 'Некорректный email получателя'
     if await db.get(Suppression, email):
         return 'Адрес в чёрном списке'
+    import hashlib
+    if await db.get(Suppression, 'sha256:' + hashlib.sha256(email.encode()).hexdigest()):
+        return 'Контакт удалён и запрещён для повторного использования'
+    if lead is not None:
+        from app.collector.consent import marketing_error
+        error = await marketing_error(db, email)
+        if error:
+            return error
     contacts = (await db.execute(select(Lead).where(func.lower(Lead.email) == email))).scalars().all()
     if any(item.status in {'unsubscribed', 'invalid', 'bounced', 'blacklisted'} for item in contacts):
         return 'Получатель отписался, заблокирован или адрес недействителен'
@@ -194,6 +202,11 @@ async def reserve_operation(db, inbox, *, operation_key, recipient, kind, lead=N
 
 @bounded_io()
 async def guarded_send(db, inbox, *, operation_key=None, kind='manual', lead=None, campaign_id=None, diagnostic_plan_id=None, diagnostic_initial=False, send, **kwargs):
+    if kind == 'campaign':
+        from app.collector.consent import marketing_error
+        permission_error = await marketing_error(db, kwargs.get('to_email', '').lower())
+        if permission_error:
+            return SendFailure('local_block', permission_error)
     from app.maintenance import is_restoring
     if is_restoring():
         return SendFailure('local_deferred','Выполняется восстановление базы; отправка отложена')

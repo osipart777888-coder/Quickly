@@ -231,6 +231,7 @@ export const api = {
     if (fields.password != null && fields.password !== '') {
       form.append('password', fields.password);
     }
+    if (fields.params != null) form.append('params', fields.params);
     const res = await fetch(API_ROOT + path, { method: 'POST', body: form, headers: _authHeaders() });
     if (res.status === 401) {
       try {

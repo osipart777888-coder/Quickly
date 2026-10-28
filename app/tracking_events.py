@@ -222,6 +222,12 @@ async def process_unsubscribe(db: AsyncSession, token: str) -> tuple[str, int]:
         enrollments = select(CampaignLead.id).where(CampaignLead.lead_id.in_(ids))
         await db.execute(delete(QueueSlot).where(QueueSlot.campaign_lead_id.in_(enrollments)))
         await db.execute(update(CampaignLead).where(CampaignLead.lead_id.in_(ids)).values(sending_paused=True, enrollment_status='unsubscribed'))
+    if lead:
+        from app.collector.models import ContactPermission
+        from app.collector.consent import set_permission
+        await db.flush()
+        if await db.get(ContactPermission, lead.email.strip().lower()):
+            await set_permission(db, lead.email, status='refused', evidence='Отписка по ссылке Quickly')
     await db.commit()
 
     if not already_done and lead and cl:

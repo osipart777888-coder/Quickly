@@ -28,6 +28,11 @@ async def reinitialize_after_restore(background_tasks: BackgroundTasks) -> None:
             control.campaigns_enabled = False
             control.reason = 'Данные восстановлены. Проверьте настройки и явно возобновите отправку.'
             await db.execute(update(DiagnosticPlan).values(enabled=False))
+            from app.collector.models import CollectionJob, CollectorSetting
+            await db.execute(update(CollectionJob).where(CollectionJob.status.in_(['queued', 'running'])).values(status='paused'))
+            report = await db.get(CollectorSetting, 'report')
+            if report:
+                report.value = {**report.value, 'enabled': False}
             await db.commit()
 
     from app.routers.schedule import run_recalculate_all_in_new_session
