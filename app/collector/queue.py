@@ -30,7 +30,7 @@ async def enqueue(db, job_id, kind, source, payload):
         await db.flush()
 
 
-async def create_job(db, params, *, records=None):
+async def create_job(db, params, *, records=None, job_id=None):
     params = dict(params)
     for key in ['regions', 'cities', 'okved', 'websites']:
         params[key] = [v.strip() for v in params.get(key, []) if v.strip()]
@@ -39,7 +39,7 @@ async def create_job(db, params, *, records=None):
         raise ValueError('Подтвердите права хранения и обработки выбранных данных')
     sources = params.get('sources', [])
     if not sources: raise ValueError('Выберите хотя бы один источник')
-    if len(sources) > 6: raise ValueError('Слишком много источников')
+    if len(sources) > 10: raise ValueError('Слишком много источников')
     unavailable = []
     usable = []
     for source_key in sources:
@@ -58,10 +58,10 @@ async def create_job(db, params, *, records=None):
     # Validate all origins BEFORE persisting unlicensed imported records in tasks.
     for record in records or []:
         origin = record.get('source') or ('fns' if sources == ['fns'] else 'import')
-        if origin not in {'import', 'fns', 'website', 'yandex', 'twogis', 'spark'}:
+        if origin not in {'import', 'fns', 'website', 'yandex', 'twogis', 'spark', 'local_yandex', 'local_2gis', 'local_spark', 'local_rusprofile'}:
             raise ValueError('Неизвестный источник строки импорта')
         permissions(await db.get(CollectorSource, origin))
-    job = CollectionJob(name=params.get('name') or 'Сбор компаний', params=dict(params),
+    job = CollectionJob(id=job_id or uuid.uuid4().hex, name=params.get('name') or 'Сбор компаний', params=dict(params),
                         errors=len(unavailable), last_error='; '.join(unavailable))
     db.add(job)
     await db.flush()
@@ -78,9 +78,10 @@ async def create_job(db, params, *, records=None):
                 await enqueue(db, job.id, 'discover', key, {'query': ' '.join(p for p in [params.get('country', 'Россия'), location, params['query']] if p), 'cursor': 0})
     if not await db.scalar(select(CollectionTask.id).where(CollectionTask.job_id == job.id)):
         raise ValueError('Для выбранного источника загрузите файл компаний')
-    setting = await db.get(CollectorSetting, 'last_params')
-    if not setting: db.add(CollectorSetting(key='last_params', value=params))
-    else: setting.value = params
+    if not params.get('parser_run'):
+        setting = await db.get(CollectorSetting, 'last_params')
+        if not setting: db.add(CollectorSetting(key='last_params', value=params))
+        else: setting.value = params
     await db.flush()
     return job
 
@@ -160,7 +161,7 @@ async def process_task(task):
                 if count >= params.get('limit', 100): break
                 origin = task.source if task.kind == 'discover' else raw.get('source') or 'import'
                 rights = permissions(await db.get(CollectorSource, origin))
-                if origin in {'website', 'import', 'fns'}: rights['basis'] = params.get('rights_basis') or rights['basis']
+                if origin in {'website', 'import', 'fns'} or origin.startswith('local_'): rights['basis'] = params.get('rights_basis') or rights['basis']
                 try:
                     async with db.begin_nested():
                         company, duplicate = await save_company(db, raw, source=origin, rights=rights, job_id=job.id)
@@ -216,12 +217,14 @@ async def finish_jobs():
                 job.finished_at = utcnow()
                 # Reports are queued separately; never generated/sent implicitly.
                 report = await db.get(CollectorSetting, 'report')
-                job.report_status = 'pending' if report and report.value.get('enabled') else 'disabled'
+                job.report_status = 'pending' if report and report.value.get('enabled') and not job.params.get('parser_run') else 'disabled'
         await db.commit()
 
 
 @background_work
 async def run_collection_tick(max_tasks=4):
+    from app.collector.local_parser import sync_finished_runs
+    await sync_finished_runs()
     # Scheduler max_instances=1 plus DB claims keep reads independent from mail IO.
     for _ in range(max_tasks):
         async with AsyncSessionLocal() as db:

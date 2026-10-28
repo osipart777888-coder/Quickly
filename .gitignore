@@ -46,3 +46,8 @@ frontend/dist/
 *.qbk
 *.local.env
 local-data/
+
+# Parser profiles, sessions and collected personal data stay on this Mac
+integrations/company_parser/.venv/
+integrations/company_parser/.local/
+integrations/company_parser/runs/

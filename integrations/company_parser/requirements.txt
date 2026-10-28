@@ -1,0 +1,6 @@
+pychrome==0.2.4
+pydantic==1.10.26
+psutil==7.2.2
+requests==2.34.2
+xlsxwriter==3.3.0
+openpyxl==3.1.5

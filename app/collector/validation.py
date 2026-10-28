@@ -100,6 +100,18 @@ def normalize_record(raw):
             for value in split_values(row.get(key)):
                 try:
                     entry = {'kind': kind, 'value': validator(value), 'url': str(row.get('source_url') or out['website'])}
+                    if kind == 'email' and isinstance(row.get('email_sources'), dict):
+                        urls = row['email_sources'].get(entry['value']) or []
+                        if isinstance(urls, list):
+                            found = False
+                            for url in urls[:20]:
+                                try: url = website_url(url)
+                                except ValueError: continue
+                                if url:
+                                    origin = {**entry, 'url': url}
+                                    if origin not in out['contacts']: out['contacts'].append(origin)
+                                    found = True
+                            if found: continue
                     if entry not in out['contacts']:
                         out['contacts'].append(entry)
                 except ValueError:

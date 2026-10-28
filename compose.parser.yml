@@ -1,0 +1,12 @@
+# Mac Chrome/parser stays on the host. Only its private connection file is mounted.
+services:
+  app:
+    environment:
+      QUICKLY_PARSER_CONNECTION_FILE: /run/secrets/parser-bridge.json
+    volumes:
+      - type: bind
+        source: '${QUICKLY_DATA_DIR}/parser-bridge.json'
+        target: /run/secrets/parser-bridge.json
+        read_only: true
+        bind:
+          create_host_path: false

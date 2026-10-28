@@ -5,7 +5,13 @@ export QUICKLY_DATA_DIR="${QUICKLY_DATA_DIR:-$HOME/Library/Application Support/Q
 export PATH="/Applications/Docker.app/Contents/Resources/bin:$HOME/.docker/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 mkdir -p "$QUICKLY_DATA_DIR/backups" "$QUICKLY_DATA_DIR/logs"
 chmod 700 "$QUICKLY_DATA_DIR" "$QUICKLY_DATA_DIR/backups" "$QUICKLY_DATA_DIR/logs"
-compose() { docker compose -p quickly-mac -f "$ROOT/compose.macos.yml" "$@"; }
+compose() {
+  local files=(-f "$ROOT/compose.macos.yml")
+  if [[ -f "$QUICKLY_DATA_DIR/parser-bridge.json" && -f "$ROOT/compose.parser.yml" ]]; then
+    files+=(-f "$ROOT/compose.parser.yml")
+  fi
+  docker compose -p quickly-mac "${files[@]}" "$@"
+}
 ensure_docker() {
   if ! docker info >/dev/null 2>&1; then
     open -a Docker
@@ -20,6 +26,9 @@ ensure_docker() {
 case "${1:-start}" in
   start)
     ensure_docker
+    if [[ -f "$QUICKLY_DATA_DIR/parser-bridge.json" ]]; then
+      launchctl kickstart "gui/$(id -u)/com.quickly.parser-bridge" >/dev/null 2>&1 || true
+    fi
     compose up -d --wait --wait-timeout 180
     for ((i=0;i<60;i++)); do
       if curl -fsS http://localhost:8765/api/auth/setup-status >/dev/null; then exit 0; fi

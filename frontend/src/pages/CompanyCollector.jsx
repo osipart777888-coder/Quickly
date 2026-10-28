@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { Link } from 'react-router-dom';
+import LocalCompanyParser from '../components/local/LocalCompanyParser';
 
 const initial = { name: 'Сбор компаний', sources: ['website'], country: 'Россия', regions: [], cities: [], okved: [], query: '', employees_min: null, employees_max: null, limit: 100, only_active: false, only_email: false, exclude_existing: true, crawl_websites: true, check_mx: false, websites: [], rights_confirmed: false, rights_basis: '' };
 const states = { ready: 'Доступен', blocked: 'Требует настройки', not_connected: 'Не подключён', queued: 'В очереди', running: 'Выполняется', paused: 'На паузе', stopped: 'Остановлен', completed: 'Завершён', completed_with_errors: 'Завершён с ошибками' };
@@ -14,7 +15,7 @@ function date(value) { return value ? new Date(value.endsWith('Z') ? value : val
 function split(value) { return value.split(/[;,\n]+/).map(v => v.trim()).filter(Boolean); }
 
 export default function CompanyCollector() {
-  const [tab, setTab] = useState('collect'), [params, setParams] = useState(initial), [sources, setSources] = useState([]);
+  const [tab, setTab] = useState('local'), [params, setParams] = useState(initial), [sources, setSources] = useState([]);
   const [jobs, setJobs] = useState([]), [stats, setStats] = useState({}), [table, setTable] = useState({ items: [], total: 0 });
   const [filters, setFilters] = useState({ q: '', city: '', region: '', okved: '', source: '', status: '', has_email: '', consent: '', job_id: '', only_active: false, employees_min: '', employees_max: '', exclude_existing: false, sort: 'created_at', descending: true });
   const [page, setPage] = useState(1), [selected, setSelected] = useState([]), [detail, setDetail] = useState(null);
@@ -32,7 +33,7 @@ export default function CompanyCollector() {
   async function run(action) { setBusy(true); setMessage(''); try { return await action(); } catch (error) { setMessage(error.message); } finally { setBusy(false); } }
   useEffect(() => {
     reload().catch(e => setMessage(e.message));
-    api.get('/collector/settings').then(s => { if (s.last_params) setParams({ ...initial, ...s.last_params, rights_confirmed: false }); if (s.report) setReport(s.report); }).catch(e => setMessage(e.message));
+    api.get('/collector/settings').then(s => { if (s.last_params && !s.last_params.parser_run) setParams({ ...initial, ...s.last_params, rights_confirmed: false }); if (s.report) setReport(s.report); }).catch(e => setMessage(e.message));
     api.get('/campaigns').then(c => setCampaigns(Array.isArray(c) ? c : c.items || [])).catch(() => {});
     api.get('/smtp/accounts').then(setAccounts).catch(() => {});
     const timer = setInterval(() => reload().catch(() => {}), 5000);
@@ -71,11 +72,12 @@ export default function CompanyCollector() {
   return <div className="space-y-5 max-w-[1600px] mx-auto">
     <div><h1 className="text-2xl font-bold">Сбор компаний</h1><p className="text-sm text-gray-500 mt-1">Поиск организаций, публичные контакты и происхождение данных в единой базе Quickly.</p></div>
     <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2">{[['Компании', 'companies'], ['Уникальные email', 'unique_emails'], ['Телефоны', 'phones'], ['Без контактов', 'without_contacts'], ['Без email', 'without_email'], ['Проверено сайтов', 'sites_checked'], ['Дубли', 'duplicates'], ['Ошибки', 'errors']].map(([label, key]) => <div key={key} className="rounded-lg border bg-white p-3"><div className="text-xs text-gray-500">{label}</div><strong className="text-xl">{stats[key] ?? 0}</strong></div>)}</div>
-    <nav aria-label="Разделы сбора компаний" className="flex flex-wrap gap-2">{[['collect', 'Новый сбор'], ['results', 'Результаты'], ['history', 'История запусков'], ['sources', 'Источники и API'], ['consents', 'Согласия и отказы'], ['report', 'Отчёты'], ['help', 'Как пользоваться']].map(([id, title]) => <button key={id} aria-pressed={tab === id} onClick={() => setTab(id)} className={`${buttonClass} ${tab === id ? 'bg-blue-700 text-white border-blue-700' : 'bg-white'}`}>{title}</button>)}</nav>
+    <nav aria-label="Разделы сбора компаний" className="flex flex-wrap gap-2">{[['local', 'Локальный парсер'], ['collect', 'Новый сбор'], ['results', 'Результаты'], ['history', 'История запусков'], ['sources', 'Источники и API'], ['consents', 'Согласия и отказы'], ['report', 'Отчёты'], ['help', 'Как пользоваться']].map(([id, title]) => <button key={id} aria-pressed={tab === id} onClick={() => setTab(id)} className={`${buttonClass} ${tab === id ? 'bg-blue-700 text-white border-blue-700' : 'bg-white'}`}>{title}</button>)}</nav>
     {message && <div role="status" className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm whitespace-pre-wrap">{message}</div>}
+    {tab === 'local' && <LocalCompanyParser onResults={id => { setFilters(f => ({ ...f, job_id: id })); setTab('results'); }}/> }
     {tab === 'collect' && <form onSubmit={start} className={panelClass}>
       <h2 className="font-semibold text-lg">Параметры сбора</h2>
-      <fieldset className="grid grid-cols-1 md:grid-cols-3 gap-3"><legend className="text-sm font-medium mb-2">Источники данных</legend>{sources.map(s => <Check key={s.key} title={`${s.name} — ${states[s.state] || s.state}`} checked={params.sources.includes(s.key)} onChange={value => change('sources', value ? [...params.sources, s.key] : params.sources.filter(k => k !== s.key))}/>)}</fieldset>
+      <fieldset className="grid grid-cols-1 md:grid-cols-3 gap-3"><legend className="text-sm font-medium mb-2">Источники данных</legend>{sources.filter(s => !s.key.startsWith('local_')).map(s => <Check key={s.key} title={`${s.name} — ${states[s.state] || s.state}`} checked={params.sources.includes(s.key)} onChange={value => change('sources', value ? [...params.sources, s.key] : params.sources.filter(k => k !== s.key))}/>)}</fieldset>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Field title="Название запуска"><input className={inputClass} value={params.name} onChange={e => change('name', e.target.value)}/></Field>
         <Field title="Страна"><input className={inputClass} value={params.country} onChange={e => change('country', e.target.value)}/></Field>

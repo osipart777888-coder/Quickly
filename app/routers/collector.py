@@ -21,6 +21,82 @@ from app.time import utcnow
 router = APIRouter(prefix='/api/collector', tags=['company collector'], dependencies=[Depends(get_current_user)])
 
 
+class LocalParserInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    source: Literal['yandex', '2gis', 'spark', 'rusprofile'] = 'yandex'
+    name: str = Field(default='Локальный сбор', max_length=255)
+    query: str = Field(default='', max_length=512)
+    cities: list[str] = Field(default_factory=list, max_length=30)
+    rubrics: list[str] = Field(default_factory=list, max_length=10)
+    urls: list[str] = Field(default_factory=list, max_length=20)
+    limit: int = Field(default=100, ge=1, le=10000)
+    timeout: int = Field(default=900, ge=30, le=3600)
+    delay: float = Field(default=1, ge=.5, le=60)
+    visible: bool = False
+    crawl_websites: bool = True
+    rights_confirmed: bool = False
+    rights_basis: str = Field(default='', max_length=2000)
+
+
+@router.get('/local-parser')
+async def local_parser_status(db=Depends(get_db)):
+    from app.collector import local_parser as bridge
+    try:
+        state = await bridge.request('GET', '/status')
+        runs = await bridge.request('GET', '/runs')
+    except SourceError as error:
+        return {'connected': False, 'message': str(error), 'runs': []}
+    jobs = (await db.scalars(select(CollectionJob).where(CollectionJob.params['parser_run'].as_string().is_not(None)).order_by(CollectionJob.created_at.desc()).limit(500))).all()
+    linked = {}
+    for job in jobs:
+        if job.params.get('parser_run') and job.params['parser_run'] not in linked:
+            linked[job.params['parser_run']] = job.id
+    return {**state, 'runs': [{**run, 'job_id': linked.get(run['id'])} for run in runs]}
+
+
+@router.get('/local-parser/catalog')
+async def local_parser_catalog(source: Literal['yandex', '2gis'] = 'yandex', q: str = Query('', max_length=200), kind: Literal['cities', 'rubrics'] = 'cities'):
+    from urllib.parse import urlencode
+    from app.collector.local_parser import request
+    try: return await request('GET', '/catalog?' + urlencode({'source': source, 'q': q, 'kind': kind}))
+    except SourceError as error: raise HTTPException(503, str(error))
+
+
+@router.post('/local-parser/runs')
+async def local_parser_start(data: LocalParserInput, _admin=Depends(require_admin)):
+    from app.collector.local_parser import request
+    try: return await request('POST', '/runs', data.model_dump())
+    except SourceError as error: raise HTTPException(400, str(error))
+
+
+@router.post('/local-parser/access/{source}')
+async def local_parser_access(source: Literal['spark', 'rusprofile'], _admin=Depends(require_admin)):
+    from app.collector.local_parser import request
+    try: return await request('POST', '/access/' + source, {})
+    except SourceError as error: raise HTTPException(400, str(error))
+
+
+class ParserImportInput(BaseModel):
+    rights_confirmed: bool = False
+    rights_basis: str = Field(default='', max_length=2000)
+
+
+@router.post('/local-parser/runs/{run_id}/import')
+async def local_parser_import(run_id: str, data: ParserImportInput, db=Depends(get_db), _admin=Depends(require_admin)):
+    from app.collector.local_parser import import_run, run_path
+    try:
+        run_path(run_id)
+        return await import_run(db, run_id, **data.model_dump())
+    except (SourceError, ValueError) as error: raise HTTPException(400, str(error))
+
+
+@router.post('/local-parser/runs/{run_id}/{action}')
+async def local_parser_action(run_id: str, action: Literal['pause', 'resume'], _admin=Depends(require_admin)):
+    from app.collector.local_parser import request, run_path
+    try: return await request('POST', run_path(run_id) + '/' + action, {})
+    except (SourceError, ValueError) as error: raise HTTPException(400, str(error))
+
+
 class JobInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     name: str = Field(default='Сбор компаний', max_length=255)

@@ -13,6 +13,10 @@ SOURCE_INFO = {
     'yandex': ('Яндекс Карты', 'https://yandex.ru/maps-api/products/geosearch-api'),
     'twogis': ('2ГИС', 'https://docs.2gis.com/api/search/places/overview'),
     'spark': ('СПАРК-Интерфакс', 'https://spark-interfax.ru/integration'),
+    'local_yandex': ('Яндекс Карты — локальный парсер', 'https://yandex.ru/maps/'),
+    'local_2gis': ('2ГИС — локальный парсер', 'https://2gis.ru/'),
+    'local_spark': ('СПАРК — локальный парсер', 'https://spark-interfax.ru/'),
+    'local_rusprofile': ('Rusprofile — локальный парсер', 'https://rusprofile.ru/'),
     'fns': ('ЕГРЮЛ / ЕГРИП — импорт официального файла', 'https://www.nalog.gov.ru/opendata/'),
 }
 
@@ -20,7 +24,7 @@ SOURCE_INFO = {
 async def ensure_sources(db):
     for key, (_, url) in SOURCE_INFO.items():
         if not await db.get(CollectorSource, key):
-            local = key in {'website', 'import', 'fns'}
+            local = key in {'website', 'import', 'fns'} or key.startswith('local_')
             db.add(CollectorSource(key=key, enabled=local, allow_store=local, allow_export=local,
                 terms_url=url, rights_basis='Только данные с отдельным подтверждением прав в запуске' if local else ''))
     await db.flush()
