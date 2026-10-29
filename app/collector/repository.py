@@ -66,10 +66,23 @@ async def add_contacts(db, company_id, contacts, *, source, rights):
             await db.flush()
 
 
-async def save_company(db, raw, *, source, rights, job_id=None):
+async def has_collectable_email(db, contacts):
+    from app.local_models import Suppression
+    for contact in contacts:
+        if contact['kind'] == 'email' and not await db.get(
+            Suppression, 'sha256:' + hashlib.sha256(contact['value'].lower().encode()).hexdigest()
+        ):
+            return True
+    return False
+
+
+async def save_company(db, raw, *, source, rights, job_id=None, require_email=False, enrichment=None):
     if not rights.get('store'):
         raise ValueError('Источник не разрешает хранение данных')
     record = normalize_record(raw)
+    extra_contacts = enrichment['contacts'] if enrichment else []
+    if require_email and not await has_collectable_email(db, record['contacts'] + extra_contacts):
+        return None, False
     external_id = record['external_id'] or hashlib.sha256(json.dumps({
         k: record.get(k) for k in ['inn', 'kpp', 'ogrn', 'name', 'website', 'address']
     }, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
@@ -105,6 +118,11 @@ async def save_company(db, raw, *, source, rights, job_id=None):
     observation.rights = dict(rights)
     observation.checked_at = utcnow()
     await add_contacts(db, company.id, record['contacts'], source=source, rights=rights)
+    if enrichment:
+        # A phone may occur in both the card and its website. Make the card's
+        # pending contacts visible before merging website origins.
+        await db.flush()
+        await add_contacts(db, company.id, extra_contacts, source=enrichment['source'], rights=enrichment['rights'])
     if job_id and not await db.get(CollectionResult, (job_id, company.id)):
         db.add(CollectionResult(job_id=job_id, company_id=company.id, was_existing=existing))
     await db.flush()

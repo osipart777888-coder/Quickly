@@ -12,9 +12,9 @@ from sqlalchemy import func, or_, select, update
 from app.database import AsyncSessionLocal
 from app.maintenance import background_work
 from app.collector.models import CollectionJob, CollectionTask, CollectionResult, Company, CollectorSource, CollectorSetting, WebsiteThrottle
-from app.collector.repository import save_company, add_contacts
+from app.collector.repository import save_company, add_contacts, has_collectable_email
 from app.collector.sources import ADAPTERS, ensure_sources, permissions, reserve_api_request, connection_state
-from app.collector.validation import domain_of, website_url
+from app.collector.validation import domain_of, website_url, normalize_record
 from app.collector.websites import SourceError, extract_website
 from app.time import utcnow
 
@@ -32,6 +32,7 @@ async def enqueue(db, job_id, kind, source, payload):
 
 async def create_job(db, params, *, records=None, job_id=None):
     params = dict(params)
+    params['only_email'] = True
     for key in ['regions', 'cities', 'okved', 'websites']:
         params[key] = [v.strip() for v in params.get(key, []) if v.strip()]
     await ensure_sources(db)
@@ -146,33 +147,52 @@ async def process_task(task):
             await db.commit()
             return
         if task.kind == 'website':
-            company = await db.get(Company, task.payload['company_id'])
+            rights = permissions(await db.get(CollectorSource, 'website'))
+            rights['basis'] = params.get('rights_basis') or rights['basis']
+            if 'record' in task.payload:
+                # Keep candidates in the durable task until website enrichment
+                # finds an email. Empty/failed sites never create a Company.
+                origin = task.payload['origin']
+                origin_rights = permissions(await db.get(CollectorSource, origin))
+                origin_rights['basis'] = params.get('rights_basis') or origin_rights['basis']
+                company, duplicate = await save_company(db, task.payload['record'], source=origin,
+                    rights=origin_rights, job_id=job.id, require_email=True,
+                    enrichment={'contacts': result['contacts'], 'source': 'website', 'rights': rights})
+                job.duplicates += int(duplicate)
+                current.payload = {}
+            else:
+                company = await db.get(Company, task.payload['company_id'])
+                if company:
+                    await add_contacts(db, company.id, result['contacts'], source='website', rights=rights)
+            job.sites_checked += 1
             if company:
-                rights = permissions(await db.get(CollectorSource, 'website'))
-                rights['basis'] = params.get('rights_basis') or rights['basis']
-                await add_contacts(db, company.id, result['contacts'], source='website', rights=rights)
-                job.sites_checked += 1
                 company.checked_at = utcnow()
         else:
             rows = result.records if result else task.payload['rows']
-            count = 0
             for raw in rows:
-                count = await db.scalar(select(func.count()).select_from(CollectionResult).where(CollectionResult.job_id == job.id)) or 0
-                if count >= params.get('limit', 100): break
+                if job.processed >= params.get('limit', 100): break
                 origin = task.source if task.kind == 'discover' else raw.get('source') or 'import'
                 rights = permissions(await db.get(CollectorSource, origin))
                 if origin in {'website', 'import', 'fns'} or origin.startswith('local_'): rights['basis'] = params.get('rights_basis') or rights['basis']
+                job.processed += 1
                 try:
                     async with db.begin_nested():
-                        company, duplicate = await save_company(db, raw, source=origin, rights=rights, job_id=job.id)
+                        record = normalize_record(raw)
+                        crawl = params.get('crawl_websites') or task.source == 'website'
+                        if not await has_collectable_email(db, record['contacts']):
+                            if crawl and record['website']:
+                                await enqueue(db, job.id, 'website', 'website',
+                                    {'url': record['website'], 'record': raw, 'origin': origin})
+                            continue
+                        company, duplicate = await save_company(db, raw, source=origin, rights=rights,
+                            job_id=job.id, require_email=True)
                     job.duplicates += int(duplicate)
-                    job.processed += 1
-                    if (params.get('crawl_websites') or task.source == 'website') and company.website and not (duplicate and params.get('exclude_existing')):
+                    if company and (params.get('crawl_websites') or task.source == 'website') and company.website and not (duplicate and params.get('exclude_existing')):
                         await enqueue(db, job.id, 'website', 'website', {'company_id': company.id, 'url': company.website})
                 except ValueError as error:
                     job.errors += 1
                     job.last_error = str(error)
-            if result and result.next_cursor is not None and count < params.get('limit', 100) and result.next_cursor < 10000:
+            if result and result.next_cursor is not None and job.processed < params.get('limit', 100) and result.next_cursor < 10000:
                 await enqueue(db, job.id, 'discover', task.source, {**task.payload, 'cursor': result.next_cursor})
         current.status, current.claim_token, current.lease_until = 'done', '', None
         current.error = ''

@@ -117,7 +117,7 @@ class JobInput(BaseModel):
     employees_max: int | None = Field(default=None, ge=0)
     limit: int = Field(default=100, ge=1, le=10000)
     only_active: bool = False
-    only_email: bool = False
+    only_email: bool = True
     exclude_existing: bool = True
     crawl_websites: bool = True
     check_mx: bool = False
@@ -308,7 +308,7 @@ async def company_json(db, company):
 
 
 @router.get('/companies')
-async def companies(q: str = '', city: str = '', region: str = '', okved: str = '', source: str = '', status: str = '', has_email: bool | None = None,
+async def companies(q: str = '', city: str = '', region: str = '', okved: str = '', source: str = '', status: str = '', has_email: bool | None = True,
                     consent: str = '', job_id: str = '', only_active: bool = False, employees_min: int | None = None, employees_max: int | None = None,
                     exclude_existing: bool = False, sort: Literal['name', 'city', 'checked_at', 'created_at'] = 'created_at',
                     descending: bool = True, page: int = Query(1, ge=1), db=Depends(get_db)):
@@ -321,7 +321,7 @@ async def companies(q: str = '', city: str = '', region: str = '', okved: str = 
 
 @router.get('/stats')
 async def stats(db=Depends(get_db)):
-    counters = await statistics(db)
+    counters = await statistics(db, select(CompanyContact.company_id).where(CompanyContact.kind == 'email'))
     for name in ['duplicates', 'sites_checked', 'errors']:
         counters[name] = await db.scalar(select(func.sum(getattr(CollectionJob, name)))) or 0
     return counters
@@ -404,7 +404,7 @@ async def transfer(data: Selection, db=Depends(get_db), _admin=Depends(require_a
 
 @router.post('/export/{format}')
 async def export(format: Literal['csv', 'xlsx'], data: Selection, job_id: str = '', db=Depends(get_db)):
-    query = select(Company)
+    query = filtered_query(has_email=True)
     if data.company_ids: query = query.where(Company.id.in_(data.company_ids))
     elif job_id: query = query.where(Company.id.in_(select(CollectionResult.company_id).where(CollectionResult.job_id == job_id)))
     else: raise HTTPException(400, 'Выберите компании или конкретный запуск для экспорта')

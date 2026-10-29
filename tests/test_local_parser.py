@@ -91,6 +91,7 @@ async def test_import_idempotent_origin_and_unknown_consent(session, monkeypatch
         return {'rows': [row], 'version': 'v1'} if path.endswith('/snapshot') else [run]
     monkeypatch.setattr(local_parser, 'request', request)
     first = await local_parser.import_run(session, run_id)
+    assert (await session.get(CollectionJob, first['job_id'])).params['only_email'] is True
     repeated = await local_parser.import_run(session, run_id)
     assert first['job_id'] == repeated['job_id'] and repeated['already_imported']
     assert await session.scalar(select(func.count()).select_from(CollectionJob)) == 1

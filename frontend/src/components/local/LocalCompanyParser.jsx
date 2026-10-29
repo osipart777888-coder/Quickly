@@ -52,7 +52,7 @@ export default function LocalCompanyParser({ onResults }) {
     await run(async () => {
       const result = await api.post('/collector/local-parser/runs/' + id + '/import', { rights_confirmed: confirmed, rights_basis: importBasis });
       setSavedImport(null); setImportBasis('');
-      setMessage(result.already_imported ? 'Эта версия уже импортирована. Новые дубликаты не создавались.' : result.rows ? 'В очереди импорта: ' + result.rows + ' компаний. Данные сохранятся в общей базе; email получат статус «Неизвестно».' : 'В этой выгрузке пока нет компаний.');
+      setMessage(result.already_imported ? 'Эта версия уже импортирована. Новые дубликаты не создавались.' : result.rows ? 'На проверку поставлено: ' + result.rows + ' карточек. В базу попадут только компании с найденным email.' : 'В этой выгрузке пока нет компаний.');
     });
   }
   const maps = ['yandex', '2gis'].includes(form.source);
@@ -72,7 +72,7 @@ export default function LocalCompanyParser({ onResults }) {
         <label className="text-sm">Сколько компаний проверить<input type="number" min="1" max="10000" required className={input} value={form.limit} onChange={e => change('limit', Number(e.target.value))}/></label>
         {maps ? <>
           <label className="text-sm">Тематика / поисковая фраза<input className={input} required={form.source === 'yandex' || !form.rubrics.trim()} placeholder="Например: юридические компании" value={form.query} onChange={e => change('query', e.target.value)}/></label>
-          <label className="text-sm md:col-span-2">Города через точку с запятой<input required className={input} placeholder="Тула; Рязань; Калуга" list="parser-cities" value={form.cities} onChange={e => change('cities', e.target.value)}/><datalist id="parser-cities">{cities.map(c => <option key={c.code} value={c.name}/>)}</datalist><span className="text-xs text-gray-500">Лимит действует на весь запуск. Email находятся на сайтах; не у каждой компании есть публичная почта.</span></label>
+          <label className="text-sm md:col-span-2">Города через точку с запятой<input required className={input} placeholder="Тула; Рязань; Калуга" list="parser-cities" value={form.cities} onChange={e => change('cities', e.target.value)}/><datalist id="parser-cities">{cities.map(c => <option key={c.code} value={c.name}/>)}</datalist><span className="text-xs text-gray-500">Лимит — количество проверяемых карточек за весь запуск. В результаты попадут только компании с найденным email; их может быть меньше лимита.</span></label>
           {form.source === '2gis' && <label className="text-sm">Коды рубрик 2ГИС (необязательно)<input className={input} placeholder="Например: 344" value={form.rubrics} onChange={e => change('rubrics', e.target.value)}/></label>}
         </> : <div className="md:col-span-3 space-y-3"><button type="button" className={button} disabled={busy || active || !state.connected} onClick={() => run(async () => { await api.post('/collector/local-parser/access/' + form.source, {}); setMessage('Открывается отдельное окно Chrome для входа. Выберите нужные фильтры на сайте и вставьте ссылку выборки ниже. Пароли вводите только на сайте сервиса.'); })}>Открыть окно входа в {labels[form.source]}</button><label className="block text-sm">HTTPS-ссылки выборки / карточек, по одной на строке<textarea className={input} rows="3" placeholder="Пусто — использовать сохранённую в парсере выборку" value={form.urls} onChange={e => change('urls', e.target.value)}/></label>{state.access?.message && <p className="text-sm">{state.access.message}</p>}</div>}
       </div>
@@ -81,7 +81,7 @@ export default function LocalCompanyParser({ onResults }) {
         <label>Тайм-аут одного задания, секунд<input type="number" min="30" max="3600" className={input} value={form.timeout} onChange={e => change('timeout', Number(e.target.value))}/></label>
         <label className="flex items-center gap-2"><input type="checkbox" checked={form.visible} onChange={e => change('visible', e.target.checked)}/>Показать Chrome при сборе</label>
       </div></details>
-      <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={form.crawl_websites} onChange={e => change('crawl_websites', e.target.checked)}/>Собирать публичные email с сайтов компаний (основной этап поиска почт)</label>
+      <p className="text-sm text-gray-500">Ищем публичные email в карточках и на сайтах. Компании без найденной почты не добавляются в результаты. Телефоны сохраняются отдельным полем.</p>
       <label className="block text-sm">Основание обработки выбранных данных<input required maxLength="2000" className={input} placeholder="Укажите своё основание" value={form.rights_basis} onChange={e => change('rights_basis', e.target.value)}/></label>
       <label className="flex items-start gap-2 text-sm"><input required type="checkbox" checked={form.rights_confirmed} onChange={e => change('rights_confirmed', e.target.checked)}/>Подтверждаю права на хранение и обработку выбранных данных</label>
       <button className={button + ' bg-blue-700 text-white'} disabled={busy || !state.connected || !state.parser_available || active}>Начать поиск почт</button>
@@ -93,7 +93,7 @@ export default function LocalCompanyParser({ onResults }) {
       {!state.runs.length && <p className="text-sm">Сохранённых запусков пока нет.</p>}
       {state.runs.map(r => <article key={r.id} className="rounded-lg border p-4 space-y-2">
         <div className="flex justify-between gap-3"><strong className="break-all">{r.name}</strong><span className="text-sm whitespace-nowrap">{emailStage(r)}</span></div>
-        <p className="text-sm">{labels[r.source] || r.source} · Компаний: {r.email_progress?.companies || r.stats.companies} · Уникальных email: {r.email_progress?.unique_emails ?? r.stats.emails}{r.email_progress ? ` · Компаний с почтой: ${r.email_progress.with_email}` : ''}</p>
+        <p className="text-sm">{labels[r.source] || r.source} · Проверено карточек: {r.stats.companies} · Уникальных email: {r.email_progress?.unique_emails ?? r.stats.emails}{r.email_progress ? ` · Компаний с почтой: ${r.email_progress.with_email}` : ''}</p>
         {r.email_progress && <p className="text-sm text-gray-500">Проверено сайтов: {r.email_progress.sites_checked} · В очереди: {r.email_progress.sites_pending} · Недоступно: {r.email_progress.sites_failed}</p>}
         {r.message && <p className="text-sm text-red-700 whitespace-pre-wrap">{r.message}</p>}
         <div className="flex flex-wrap gap-2">

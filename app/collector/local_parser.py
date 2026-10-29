@@ -85,7 +85,7 @@ async def import_run(db, run_id, *, rights_basis=None, rights_confirmed=False):
         existing.params = {**existing.params, 'parser_checkpoint': run.get('checkpoint', 0)}
         await db.flush()
         return {'job_id': existing.id, 'rows': len(rows), 'already_imported': True}
-    params = {**params, 'name': run['name'], 'sources': sorted({r['source'] for r in rows}), 'websites': [],
+    params = {**params, 'only_email': True, 'name': run['name'], 'sources': sorted({r['source'] for r in rows}), 'websites': [],
               'check_mx': False, 'exclude_existing': False, 'parser_run': run_id, 'parser_version': snapshot['version'], 'parser_checkpoint': run.get('checkpoint', 0)}
     async with db.begin_nested():
         job = await create_job(db, params, records=rows, job_id=job_id)

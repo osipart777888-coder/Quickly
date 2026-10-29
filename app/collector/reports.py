@@ -73,7 +73,7 @@ async def export_bytes(db, companies, format):
     omitted = 0
     for company in companies:
         row = await exportable_company(db, company)
-        if not row:
+        if not row or not row['emails']:
             omitted += 1
             continue
         statuses = []

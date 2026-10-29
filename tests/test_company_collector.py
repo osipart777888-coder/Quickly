@@ -354,3 +354,102 @@ async def test_api_import_params_and_pagination(session):
         response = await client.get('/api/collector/companies?page=2&has_email=true')
         assert response.status_code == 200 and len(response.json()['items']) == 1
         assert response.json()['total'] == 51
+
+
+@pytest.mark.asyncio
+async def test_email_only_queue_waits_for_site_and_skips_phone_only_candidates(engine, session, monkeypatch):
+    rows = [
+        record(1, name='Card email', phones=['+74951234567']),
+        record(2, name='Site email', email='', phones=['+74951234568']),
+        record(3, name='Empty site', email='', phones=['+74951234569']),
+        record(4, name='Phone only', email='', website='', phones=['+74951234560']),
+        record(5, name='Template email', email='noreply@test-fixture.ru', website=''),
+    ]
+    params = dict(sources=['import'], rights_confirmed=True, rights_basis='Test records', limit=5, crawl_websites=True, only_email=False)
+    job = await queue.create_job(session, params, records=rows)
+    assert job.params['only_email'] is True
+    await session.commit()
+    task = await queue.claim_task(session)
+    await queue.process_task(task)
+    # No company placeholders while the sites are being checked.
+    assert (await session.scalars(select(Company.name))).all() == ['Card email']
+    def website(url, **kwargs):
+        contacts = []
+        if 'company-2.' in url:
+            contacts = [{'kind': 'email', 'value': 'found@test-fixture.ru', 'url': url + 'contacts'},
+                        {'kind': 'phone', 'value': '+74951234568', 'url': url + 'contacts'}]
+        return {'contacts': contacts, 'pages_checked': 1}
+    monkeypatch.setattr(queue, 'extract_website', website)
+    await queue.run_collection_tick(max_tasks=10)
+    names = set((await session.scalars(select(Company.name))).all())
+    assert names == {'Card email', 'Site email'}
+    await session.refresh(job)
+    assert job.processed == 5 and job.sites_checked == 3
+    assert job.status == 'completed'
+    found = await session.scalar(select(CompanyContact).where(CompanyContact.value == 'found@test-fixture.ru'))
+    assert found.origins[0]['source'] == 'website'
+    assert found.origins[0]['url'].endswith('/contacts')
+    phones = (await session.scalars(select(CompanyContact.value).where(CompanyContact.kind == 'phone'))).all()
+    assert set(phones) == {'+74951234567', '+74951234568'}
+    staged = (await session.scalars(select(CollectionTask).where(CollectionTask.kind == 'website').execution_options(populate_existing=True))).all()
+    assert all(not t.payload.get('record') for t in staged)
+    # Replay remains idempotent even when the email was found on a site.
+    await queue.create_job(session, params, records=rows)
+    await session.commit()
+    await queue.run_collection_tick(max_tasks=10)
+    assert await session.scalar(select(func.count()).select_from(Company)) == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_site_does_not_create_email_less_company(engine, session, monkeypatch):
+    params = dict(sources=['import'], rights_confirmed=True, rights_basis='Test records', limit=1, crawl_websites=True)
+    job = await queue.create_job(session, params, records=[record(email='')])
+    await session.commit()
+    def unavailable(*args, **kwargs):
+        raise SourceError('Site unavailable')
+    monkeypatch.setattr(queue, 'extract_website', unavailable)
+    await queue.run_collection_tick(max_tasks=5)
+    assert await session.scalar(select(func.count()).select_from(Company)) == 0
+    await session.refresh(job)
+    assert job.status == 'completed_with_errors'
+
+
+@pytest.mark.asyncio
+async def test_suppressed_email_cannot_qualify_new_company(session):
+    import hashlib
+    from app.local_models import Suppression
+    session.add(Suppression(email='sha256:' + hashlib.sha256(b'office1@test-fixture.ru').hexdigest(), reason='Removed'))
+    await session.flush()
+    company, duplicate = await save_company(session, record(), source='import', rights=RIGHTS, require_email=True)
+    assert company is None and duplicate is False
+    assert await session.scalar(select(func.count()).select_from(Company)) == 0
+
+
+@pytest.mark.asyncio
+async def test_default_results_and_exports_exclude_legacy_phone_only_companies(session):
+    from app.routers.collector import companies, export, Selection
+    await ensure_sources(session)
+    with_email, _ = await save_company(session, record(1), source='import', rights=RIGHTS)
+    legacy, _ = await save_company(session, record(2, email=''), source='import', rights=RIGHTS)
+    result = await companies(db=session, page=1)
+    assert result['total'] == 1 and result['items'][0]['id'] == with_email.id
+    response = await export('csv', Selection(company_ids=[with_email.id, legacy.id]), db=session)
+    rows = list(csv.DictReader(io.StringIO(response.body.decode('utf-8-sig'))))
+    assert len(rows) == 1 and rows[0]['emails'] == 'office1@test-fixture.ru'
+    raw, omitted = await export_bytes(session, [legacy], 'csv')
+    assert omitted == 1 and len(list(csv.reader(io.StringIO(raw.decode('utf-8-sig'))))) == 1
+
+
+@pytest.mark.asyncio
+async def test_site_email_keeps_website_export_permissions(session):
+    from app.collector.reports import exportable_company
+    await ensure_sources(session)
+    website_source = await session.get(CollectorSource, 'website')
+    website_source.allow_export = False
+    company, _ = await save_company(session, record(email=''), source='import', rights=RIGHTS,
+        require_email=True, enrichment={'source': 'website', 'rights': {**RIGHTS, 'export': False},
+            'contacts': [{'kind': 'email', 'value': 'found@test-fixture.ru', 'url': 'https://company-1.test-fixture.ru/contact'}]})
+    projection = await exportable_company(session, company)
+    assert projection['name'] == company.name and projection['emails'] == []
+    _, omitted = await export_bytes(session, [company], 'csv')
+    assert omitted == 1
