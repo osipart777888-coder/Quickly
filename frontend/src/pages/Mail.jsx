@@ -3,6 +3,7 @@ import { api } from '../api';
 import EmailContent from '../components/EmailContent';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
+import './Mail.css';
 
 
 const ROLE_LABELS = {
@@ -217,13 +218,13 @@ export default function Mail() {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-4">
+    <div className="mail-page flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Почта</h1>
           <p className="text-sm text-gray-500">Просмотр серверных папок выбранного ящика в режиме чтения</p>
         </div>
-        <div className="flex items-center gap-3 text-xs text-gray-500">
+        <div className="flex min-w-0 flex-wrap items-center gap-3 text-xs text-gray-500">
           <span className={`h-2.5 w-2.5 rounded-full ${sync.status === 'ok' ? 'bg-green-500' : sync.status === 'error' ? 'bg-red-500' : 'bg-gray-400'}`} />
           <span>
             {sync.status === 'error'
@@ -240,8 +241,8 @@ export default function Mail() {
 
       {error && <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-hidden xl:grid-cols-[250px_390px_minmax(0,1fr)]">
-        <Card className="flex min-h-0 flex-col overflow-hidden p-3">
+      <div className="mail-columns grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 overflow-hidden xl:grid-cols-[250px_390px_minmax(0,1fr)]">
+        <Card className="mail-accounts flex min-h-0 min-w-0 flex-col overflow-hidden p-3">
           <h2 className="mb-2 font-semibold">Почтовый ящик</h2>
           <input
             value={accountFilter}
@@ -279,9 +280,11 @@ export default function Mail() {
                   setSelectedMessage(null);
                   setMessageDetail(null);
                 }}
-                className={`w-full rounded px-3 py-2 text-left text-sm ${selectedFolderId === folder.id ? 'bg-teal-100 font-semibold text-teal-900' : 'hover:bg-gray-100'}`}
+                title={folder.name}
+                aria-pressed={selectedFolderId === folder.id}
+                className={`mail-folder-row w-full rounded px-3 py-2 text-left text-sm ${selectedFolderId === folder.id ? 'bg-teal-100 font-semibold text-teal-900' : 'hover:bg-gray-100'}`}
               >
-                <div>{ROLE_LABELS[folder.role] || folder.name}</div>
+                <div className="truncate">{ROLE_LABELS[folder.role] || folder.name}</div>
                 {(folder.role === 'other' || folder.name !== ROLE_LABELS[folder.role]) && (
                   <div className="truncate text-xs font-normal text-gray-500">{folder.name}</div>
                 )}
@@ -290,7 +293,7 @@ export default function Mail() {
           </div>
         </Card>
 
-        <Card className="flex min-h-0 flex-col overflow-hidden p-3">
+        <Card className="mail-messages flex min-h-0 min-w-0 flex-col overflow-hidden p-3">
           <div className="mb-3">
             <div className="mb-2 flex items-center justify-between gap-2">
               <h2 className="truncate font-semibold">{selectedFolder ? (ROLE_LABELS[selectedFolder.role] || selectedFolder.name) : 'Письма'}</h2>
@@ -325,14 +328,15 @@ export default function Mail() {
                   key={`${item.source}:${item.message_key}`}
                   type="button"
                   onClick={() => openMessage(item)}
-                  className={`w-full rounded border p-3 text-left ${active ? 'border-teal-400 bg-teal-50' : item.is_read ? 'border-gray-200 bg-white hover:bg-gray-50' : 'border-blue-200 bg-blue-50 hover:bg-blue-100/60'}`}
+                  aria-pressed={active}
+                  className={`mail-message-row w-full rounded border p-3 text-left ${active ? 'border-teal-400 bg-teal-50' : item.is_read ? 'border-gray-200 bg-white hover:bg-gray-50' : 'border-blue-200 bg-blue-50 hover:bg-blue-100/60'}`}
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <span className={`truncate text-sm ${item.is_read ? 'font-medium' : 'font-bold'}`}>{item.subject || '(без темы)'}</span>
-                    <span className="shrink-0 text-[11px] text-gray-400">{formatDate(item.date)}</span>
+                  <div className="flex min-w-0 flex-col items-start gap-1">
+                    <span title={item.subject || '(без темы)'} className={`block w-full min-w-0 truncate text-sm ${item.is_read ? 'font-medium' : 'font-bold'}`}>{item.subject || '(без темы)'}</span>
+                    <time dateTime={item.date || undefined} className="block text-[11px] text-gray-400">{formatDate(item.date)}</time>
                   </div>
-                  <div className="mt-1 truncate text-xs text-gray-500">От: {item.from || '—'}</div>
-                  <div className="truncate text-xs text-gray-500">Кому: {item.to || '—'}</div>
+                  <div title={item.from || ''} className="mt-1 truncate text-xs text-gray-500">От: {item.from || '—'}</div>
+                  <div title={item.to || ''} className="truncate text-xs text-gray-500">Кому: {item.to || '—'}</div>
                   <div className="mt-1 line-clamp-2 text-xs text-gray-600">{item.snippet || '(нет текстового фрагмента)'}</div>
                   {item.source === 'local' && <span className="mt-1 inline-block rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500">копия Quickly</span>}
                 </button>
@@ -340,21 +344,21 @@ export default function Mail() {
             })}
           </div>
 
-          <div className="mt-3 flex items-center justify-between border-t border-gray-200 pt-3">
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-gray-200 pt-3">
             <Button variant="outline" disabled={page <= 1 || loadingMessages} onClick={() => setPage(value => Math.max(1, value - 1))}>Назад</Button>
             <span className="text-xs text-gray-500">Страница {page} из {totalPages}</span>
             <Button variant="outline" disabled={page >= totalPages || loadingMessages} onClick={() => setPage(value => value + 1)}>Далее</Button>
           </div>
         </Card>
 
-        <Card className="flex min-h-0 flex-col overflow-hidden p-4">
+        <Card className="mail-reader flex min-h-0 min-w-0 flex-col overflow-hidden p-4">
           {!selectedMessage && !loadingDetail && (
             <div className="text-sm text-gray-500">Выберите письмо для просмотра.</div>
           )}
           {loadingDetail && <div className="text-sm text-gray-500">Загрузка полного письма…</div>}
           {messageDetail && !loadingDetail && (
             <>
-              <div className="border-b border-gray-200 pb-3">
+              <div className="mail-reader-header border-b border-gray-200 pb-3">
                 <h2 className="text-lg font-semibold">{messageDetail.subject || '(без темы)'}</h2>
                 <div className="mt-2 space-y-1 text-xs text-gray-600">
                   <div><strong>От:</strong> {messageDetail.from || '—'}</div>

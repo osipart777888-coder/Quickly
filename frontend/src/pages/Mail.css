@@ -1,0 +1,37 @@
+/* These cards contain several lines. Override the global inline-flex button
+   style explicitly, outside Tailwind's layers, so each line keeps its row. */
+button.mail-folder-row,
+button.mail-message-row {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-align: left;
+}
+
+.mail-reader-header {
+  overflow-wrap: anywhere;
+}
+
+/* Stack the panes with usable heights on a smaller window. The page scrolls
+   vertically while the message list and message body retain their own scroll. */
+@media (max-width: 1279px) {
+  .mail-page {
+    overflow-y: auto;
+  }
+
+  .mail-columns {
+    flex: none;
+    overflow: visible;
+  }
+
+  .mail-accounts {
+    max-height: 28rem;
+  }
+
+  .mail-messages,
+  .mail-reader {
+    height: 38rem;
+    min-height: 25rem;
+  }
+}
