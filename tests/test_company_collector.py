@@ -453,3 +453,75 @@ async def test_site_email_keeps_website_export_permissions(session):
     assert projection['name'] == company.name and projection['emails'] == []
     _, omitted = await export_bytes(session, [company], 'csv')
     assert omitted == 1
+
+
+@pytest.mark.asyncio
+async def test_select_all_crosses_pages_and_export_respects_filters_and_exclusions(session, monkeypatch):
+    from app.routers.collector import Selection, SelectionFilters, export, transfer
+    await ensure_sources(session)
+    selected_ids = []
+    for index in range(61):
+        company, _ = await save_company(session, record(index, city='Москва' if index < 60 else 'Тула'), source='import', rights=RIGHTS)
+        selected_ids.append(company.id)
+    await save_company(session, record(100, email='', city='Москва'), source='import', rights=RIGHTS)
+    selection = Selection(all_matching=True, filters=SelectionFilters(city='Москва'), excluded_ids=[selected_ids[0]])
+    response = await export('csv', selection, db=session)
+    rows = list(csv.DictReader(io.StringIO(response.body.decode('utf-8-sig'))))
+    assert len(rows) == 59  # includes companies beyond the 50-row page
+    assert {row['city'] for row in rows} == {'Москва'}
+    assert 'office0@test-fixture.ru' not in {row['emails'] for row in rows}
+    report = await transfer(selection, db=session, _admin=None)
+    assert report['blocked'] == 59 and report['created'] == 0  # existing consent checks still apply
+    captured = {}
+    async def capture_transfer(db, company_ids, *, campaign_id=None):
+        captured['ids'] = set((await db.scalars(company_ids)).all())
+        captured['campaign_id'] = campaign_id
+        return {'created': 0, 'existing': 0, 'blocked': len(captured['ids']), 'enrolled': 0}
+    monkeypatch.setattr('app.routers.collector.transfer_to_quickly', capture_transfer)
+    await transfer(selection, db=session, _admin=None)
+    assert captured['ids'] == set(selected_ids[1:60])
+    assert captured['campaign_id'] is None
+
+
+@pytest.mark.asyncio
+async def test_select_all_does_not_truncate_after_ten_thousand(session, monkeypatch):
+    from sqlalchemy import insert
+    from app.routers.collector import Selection, export
+    count = 10001
+    await session.execute(insert(Company), [
+        {'id': index + 1, 'name': f'Bulk {index}', 'normalized_name': f'bulk {index}'} for index in range(count)
+    ])
+    await session.execute(insert(CompanyContact), [
+        {'company_id': index + 1, 'kind': 'email', 'value': f'bulk{index}@test-fixture.ru', 'origins': []} for index in range(count)
+    ])
+    captured = {}
+    async def count_export(db, companies, format):
+        captured['count'] = len(companies)
+        return b'email\n', 0
+    monkeypatch.setattr('app.routers.collector.export_bytes', count_export)
+    await export('csv', Selection(all_matching=True), db=session)
+    assert captured['count'] == count
+
+
+@pytest.mark.asyncio
+async def test_select_all_job_scope_and_manual_selection_still_work(session):
+    from app.routers.collector import Selection, SelectionFilters, selection_query
+    from app.collector.models import CollectionResult
+    job = CollectionJob(name='Scoped selection', params={})
+    session.add(job)
+    await session.flush()
+    companies = []
+    for index in range(3):
+        company, _ = await save_company(session, record(index), source='import', rights=RIGHTS, job_id=job.id if index < 2 else None)
+        companies.append(company)
+    # One previously seen company can be excluded by the existing run filter.
+    previous = await session.get(CollectionResult, (job.id, companies[0].id))
+    previous.was_existing = True
+    await session.flush()
+    scope = Selection(all_matching=True, filters=SelectionFilters(job_id=job.id, exclude_existing=True))
+    assert [c.id for c in (await session.scalars(selection_query(scope))).all()] == [companies[1].id]
+    explicit = Selection(company_ids=[companies[0].id, companies[2].id])
+    assert {c.id for c in (await session.scalars(selection_query(explicit))).all()} == {companies[0].id, companies[2].id}
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException): selection_query(Selection())
+    with pytest.raises(HTTPException): selection_query(Selection(all_matching=True, company_ids=[companies[0].id]))

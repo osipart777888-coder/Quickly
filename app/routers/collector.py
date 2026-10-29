@@ -391,24 +391,58 @@ async def permissions_list(status: str = '', q: str = '', page: int = Query(1, g
     return [{c.name: getattr(row, c.name) for c in row.__table__.columns} for row in (await db.scalars(query.order_by(ContactPermission.updated_at.desc()).offset((page-1)*50).limit(50))).all()]
 
 
+class SelectionFilters(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    q: str = ''
+    city: str = ''
+    region: str = ''
+    okved: str = ''
+    source: str = ''
+    status: str = ''
+    consent: str = ''
+    job_id: str = ''
+    only_active: bool = False
+    employees_min: int | None = Field(default=None, ge=0)
+    employees_max: int | None = Field(default=None, ge=0)
+    exclude_existing: bool = False
+
+
 class Selection(BaseModel):
     company_ids: list[int] = Field(default_factory=list, max_length=10000)
     campaign_id: int | None = None
+    all_matching: bool = False
+    filters: SelectionFilters = Field(default_factory=SelectionFilters)
+    excluded_ids: list[int] = Field(default_factory=list, max_length=10000)
+
+
+def selection_query(data: Selection, *, job_id=''):
+    """Resolve all pages using the same filters as the visible company list."""
+    if data.all_matching:
+        if data.company_ids:
+            raise HTTPException(400, 'Выберите весь список или отдельные компании')
+        query = filtered_query(has_email=True, **data.filters.model_dump())
+        if data.excluded_ids:
+            query = query.where(Company.id.not_in(data.excluded_ids))
+        return query
+    query = filtered_query(has_email=True)
+    if data.company_ids:
+        return query.where(Company.id.in_(data.company_ids))
+    if job_id:
+        return query.where(Company.id.in_(select(CollectionResult.company_id).where(CollectionResult.job_id == job_id)))
+    raise HTTPException(400, 'Выберите компании или нажмите «Выбрать все»')
 
 
 @router.post('/transfer')
 async def transfer(data: Selection, db=Depends(get_db), _admin=Depends(require_admin)):
-    try: return await transfer_to_quickly(db, data.company_ids, campaign_id=data.campaign_id)
+    ids = selection_query(data).with_only_columns(Company.id)
+    try: return await transfer_to_quickly(db, ids, campaign_id=data.campaign_id)
     except ValueError as error: raise HTTPException(400, str(error))
 
 
 @router.post('/export/{format}')
 async def export(format: Literal['csv', 'xlsx'], data: Selection, job_id: str = '', db=Depends(get_db)):
-    query = filtered_query(has_email=True)
-    if data.company_ids: query = query.where(Company.id.in_(data.company_ids))
-    elif job_id: query = query.where(Company.id.in_(select(CollectionResult.company_id).where(CollectionResult.job_id == job_id)))
-    else: raise HTTPException(400, 'Выберите компании или конкретный запуск для экспорта')
-    rows = list((await db.scalars(query.order_by(Company.id).limit(10000))).all())
+    query = selection_query(data, job_id=job_id)
+    rows = list((await db.scalars(query.order_by(Company.id))).all())
     raw, omitted = await export_bytes(db, rows, format)
     mime = 'text/csv; charset=utf-8' if format == 'csv' else 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     return Response(raw, media_type=mime, headers={'Content-Disposition': f'attachment; filename="quickly-companies.{format}"', 'X-Collector-Omitted': str(omitted)})
