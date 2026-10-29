@@ -18,6 +18,7 @@ import { Button } from '../components/ui/Button';
 import { FileUploadArea } from '../components/ui/FileUploadArea';
 import { Card } from '../components/ui/Card';
 import EmailVerificationSettings from '../components/EmailVerificationSettings';
+import './Settings.css';
 
 const SETTINGS_TABS = [
   { id: 'general', label: 'General' },
@@ -824,11 +825,11 @@ export default function Settings() {
   /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-      <header className="shrink-0 px-6 lg:px-8 pt-6 lg:pt-8 pb-0 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-transparent">
+    <div className="settings-page relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <header className="settings-header shrink-0 px-6 lg:px-8 pt-6 lg:pt-8 pb-0 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-transparent">
         <h1 className="text-2xl font-bold">Settings</h1>
         <nav
-          className="mt-4 flex flex-wrap gap-x-1 gap-y-0 items-end"
+          className="settings-tabs mt-4 flex flex-wrap gap-x-1 gap-y-0 items-end"
           aria-label="Settings sections"
         >
           {visibleTabs.map(t => (
@@ -836,6 +837,7 @@ export default function Settings() {
               key={t.id}
               type="button"
               onClick={() => selectTab(t.id)}
+              aria-pressed={activeTab === t.id}
               className={
                 'px-3 py-2 text-sm font-medium leading-none transition-colors border-b-2 -mb-px ' +
                 (activeTab === t.id
@@ -849,16 +851,16 @@ export default function Settings() {
         </nav>
       </header>
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row lg:items-stretch">
+      <div className="settings-layout flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row lg:items-stretch">
         <aside
-          className="flex min-h-0 w-full shrink-0 flex-col border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900/60 lg:h-full lg:min-h-0 lg:w-44 lg:border-b-0 lg:border-r lg:bg-gray-100 lg:dark:bg-gray-900/50"
+          className="settings-sidebar flex min-h-0 w-full shrink-0 flex-col border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900/60 lg:h-full lg:min-h-0 lg:w-44 lg:border-b-0 lg:border-r lg:bg-gray-100 lg:dark:bg-gray-900/50"
           aria-label="On this page"
         >
-          <div className="flex min-h-0 flex-1 flex-col px-4 py-3 lg:py-5 lg:pl-5 lg:pr-3">
-            <p className="mb-2 block shrink-0 text-[10px] font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">
+          <div className="settings-sidebar-content flex min-h-0 flex-1 flex-col px-4 py-3 lg:py-5 lg:pl-5 lg:pr-3">
+            <p className="settings-sidebar-title mb-2 block shrink-0 text-[10px] font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">
               On this page
             </p>
-            <nav className="flex min-h-0 flex-1 flex-row flex-wrap content-start gap-1 overflow-y-auto lg:flex-col lg:flex-nowrap">
+            <nav className="settings-section-nav flex min-h-0 flex-1 flex-row flex-wrap content-start gap-1 overflow-y-auto lg:flex-col lg:flex-nowrap">
               {sectionNav.map(s => {
                 const domId = `settings-${s.id}`;
                 return (
@@ -866,8 +868,9 @@ export default function Settings() {
                     key={s.id}
                     type="button"
                     onClick={() => scrollToSection(s.id)}
+                    aria-current={activeSectionDomId === domId ? 'location' : undefined}
                     className={
-                      'rounded-md px-2 py-1.5 text-left text-xs transition-colors lg:text-sm whitespace-nowrap lg:whitespace-normal ' +
+                      'settings-section-link rounded-md px-2 py-1.5 text-left text-xs transition-colors lg:text-sm whitespace-nowrap lg:whitespace-normal ' +
                       (activeSectionDomId === domId
                         ? 'bg-primary/15 text-primary ring-1 ring-primary/30 dark:bg-primary/20 font-semibold'
                         : 'text-gray-700 hover:bg-gray-200/80 hover:text-primary dark:text-gray-300 dark:hover:bg-gray-800/80')
@@ -883,7 +886,7 @@ export default function Settings() {
 
         <div
           ref={tabContentRef}
-          className="min-h-0 min-w-0 flex-1 overflow-y-auto px-6 py-6 lg:px-8"
+          className="settings-content min-h-0 min-w-0 flex-1 overflow-y-auto px-6 py-6 lg:px-8"
         >
 
         {activeTab === 'general' && (
@@ -892,7 +895,7 @@ export default function Settings() {
           <h2 className="text-lg font-semibold mb-3 border-b border-gray-200 dark:border-gray-700 pb-2">Scheduling</h2>
           <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Controls how Recalculate All Campaigns distributes emails.</p>
           <div className="space-y-3">
-            <label className="flex gap-2 items-start cursor-pointer">
+            <label className="settings-choice flex gap-2 items-start cursor-pointer">
               <input type="radio" name="strategy" value="priority" checked={strategy === 'priority'} onChange={() => submitStrategy('priority')} />
               <span>
                 <strong>Priority by campaign</strong><br />
@@ -902,7 +905,7 @@ export default function Settings() {
                 </span>
               </span>
             </label>
-            <label className="flex gap-2 items-start cursor-pointer">
+            <label className="settings-choice flex gap-2 items-start cursor-pointer">
               <input type="radio" name="strategy" value="round_robin" checked={strategy === 'round_robin'} onChange={() => submitStrategy('round_robin')} />
               <span>
                 <strong>Round-robin distribution</strong><br />
@@ -918,7 +921,7 @@ export default function Settings() {
           <h2 className="text-lg font-semibold mb-3 border-b border-gray-200 dark:border-gray-700 pb-2">Appearance</h2>
           <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Theme follows your choice; System uses your device light/dark setting (default).</p>
           <div className="space-y-3">
-            <label className="flex gap-2 items-start cursor-pointer">
+            <label className="settings-choice flex gap-2 items-start cursor-pointer">
               <input
                 type="radio"
                 name="appearance"
@@ -934,7 +937,7 @@ export default function Settings() {
                 </span>
               </span>
             </label>
-            <label className="flex gap-2 items-start cursor-pointer">
+            <label className="settings-choice flex gap-2 items-start cursor-pointer">
               <input
                 type="radio"
                 name="appearance"
@@ -948,7 +951,7 @@ export default function Settings() {
                 <span className="text-xs text-gray-500 dark:text-gray-400">Always use light theme.</span>
               </span>
             </label>
-            <label className="flex gap-2 items-start cursor-pointer">
+            <label className="settings-choice flex gap-2 items-start cursor-pointer">
               <input
                 type="radio"
                 name="appearance"
