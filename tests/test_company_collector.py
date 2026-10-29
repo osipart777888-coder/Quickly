@@ -525,3 +525,52 @@ async def test_select_all_job_scope_and_manual_selection_still_work(session):
     from fastapi import HTTPException
     with pytest.raises(HTTPException): selection_query(Selection())
     with pytest.raises(HTTPException): selection_query(Selection(all_matching=True, company_ids=[companies[0].id]))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('group, expected', [
+    ('yandex', {'yandex', 'local_yandex'}), ('twogis', {'twogis', 'local_2gis'}),
+    ('spark', {'spark', 'local_spark'}), ('rusprofile', {'local_rusprofile'}),
+    ('website', {'website'}), ('import', {'import'}), ('fns', {'fns'}),
+])
+async def test_result_groups_keep_sources_separate_in_list_selection_and_export(session, group, expected):
+    from app.routers.collector import companies, export, Selection, SelectionFilters
+    await ensure_sources(session)
+    sources = ['yandex', 'local_yandex', 'twogis', 'local_2gis', 'spark', 'local_spark', 'local_rusprofile', 'website', 'import', 'fns']
+    ids = {}
+    for index, source in enumerate(sources):
+        configured = await session.get(CollectorSource, source)
+        configured.enabled = configured.allow_store = configured.allow_export = True
+        company, _ = await save_company(session, record(index), source=source, rights=RIGHTS)
+        ids[source] = company.id
+    result = await companies(source=group, page=1, db=session)
+    assert {company['id'] for company in result['items']} == {ids[source] for source in expected}
+    response = await export('csv', Selection(all_matching=True, filters=SelectionFilters(source=group)), db=session)
+    rows = list(csv.DictReader(io.StringIO(response.body.decode('utf-8-sig'))))
+    assert {int(row['id']) for row in rows} == {ids[source] for source in expected}
+
+
+@pytest.mark.asyncio
+async def test_grouped_sources_do_not_duplicate_the_same_company(session):
+    from app.routers.collector import companies
+    await ensure_sources(session)
+    for source in ['yandex', 'local_yandex']:
+        await save_company(session, record(), source=source, rights=RIGHTS)
+    result = await companies(source='yandex', page=1, db=session)
+    assert result['total'] == len(result['items']) == 1
+
+
+@pytest.mark.asyncio
+async def test_file_result_group_preserves_original_directory_provenance(session):
+    from app.routers.collector import companies, export, Selection, SelectionFilters
+    await ensure_sources(session)
+    job = CollectionJob(name='Imported directory file', params={'sources': ['import']})
+    session.add(job)
+    await session.flush()
+    company, _ = await save_company(session, record(), source='local_2gis', rights=RIGHTS, job_id=job.id)
+    result = await companies(source='import', page=1, db=session)
+    assert [row['id'] for row in result['items']] == [company.id]
+    assert result['items'][0]['sources'] == ['local_2gis']
+    response = await export('csv', Selection(all_matching=True, filters=SelectionFilters(source='import', job_id=job.id)), db=session)
+    rows = list(csv.DictReader(io.StringIO(response.body.decode('utf-8-sig'))))
+    assert len(rows) == 1 and int(rows[0]['id']) == company.id

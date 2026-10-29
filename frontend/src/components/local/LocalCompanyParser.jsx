@@ -17,7 +17,7 @@ function emailStage(run) {
 }
 const split = text => text.split(/[;\n]+/).map(s => s.trim()).filter(Boolean);
 
-export default function LocalCompanyParser({ onResults }) {
+export default function LocalCompanyParser({ onResults, historyOnly = false }) {
   const [state, setState] = useState({ connected: false, runs: [], message: 'Проверка соединения…' });
   const [form, setForm] = useState({ source: 'yandex', name: 'Сбор из карт', query: '', cities: '', rubrics: '', urls: '', limit: 100, timeout: 900, delay: 1, visible: false, crawl_websites: true, rights_confirmed: false, rights_basis: '' });
   const [busy, setBusy] = useState(false), [message, setMessage] = useState(''), [cities, setCities] = useState([]), [expanded, setExpanded] = useState('');
@@ -30,11 +30,11 @@ export default function LocalCompanyParser({ onResults }) {
     return () => { cancelled = true; clearInterval(timer); };
   }, []);
   useEffect(() => {
-    if (!state.connected || !['yandex', '2gis'].includes(form.source)) { setCities([]); return; }
+    if (historyOnly || !state.connected || !['yandex', '2gis'].includes(form.source)) { setCities([]); return; }
     let cancelled = false;
     api.get('/collector/local-parser/catalog?source=' + form.source).then(data => { if (!cancelled) setCities(data); }).catch(e => { if (!cancelled) setMessage(e.message); });
     return () => { cancelled = true; };
-  }, [state.connected, form.source]);
+  }, [state.connected, form.source, historyOnly]);
   async function run(action) {
     setBusy(true); setMessage('');
     try { await action(); setState(await api.get('/collector/local-parser')); }
@@ -58,14 +58,14 @@ export default function LocalCompanyParser({ onResults }) {
   const maps = ['yandex', '2gis'].includes(form.source);
   const active = state.runs.some(r => r.status === 'running');
   return <div className="space-y-5">
-    <section className="rounded-xl border bg-white p-5 space-y-3">
+    {!historyOnly && <section className="rounded-xl border bg-white p-5 space-y-3">
       <div className="flex flex-wrap justify-between gap-3"><h2 className="text-lg font-semibold">Ваш локальный парсер</h2><button className={button} disabled={busy} onClick={() => run(async () => {})}>Обновить</button></div>
       <p className="text-sm">{state.connected ? 'Подключён к Chrome на этом Mac. Яндекс Карты и 2ГИС работают через существующий парсер без API-ключей.' : state.message}</p>
       <p className="text-sm text-gray-500">Для СПАРК и Rusprofile нужны доступ и выборка в отдельном браузере парсера. При ограничении сервиса сбор остановится; причина появится ниже. Письма не отправляются.</p>
       {!state.connected && <p className="text-sm">Подключение: в папке Quickly запустите <code>python3 scripts/setup_local_parser.py</code>, затем перезапустите Quickly.</p>}
-    </section>
+    </section>}
     {message && <div role="status" className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm whitespace-pre-wrap">{message}</div>}
-    <form onSubmit={start} className="rounded-xl border bg-white p-5 space-y-4">
+    {!historyOnly && <form onSubmit={start} className="rounded-xl border bg-white p-5 space-y-4">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <label className="text-sm">Источник<select className={input} value={form.source} onChange={e => change('source', e.target.value)}>{Object.entries(labels).map(([key, name]) => <option key={key} value={key}>{name}</option>)}</select></label>
         <label className="text-sm">Название запуска<input className={input} value={form.name} onChange={e => change('name', e.target.value)}/></label>
@@ -86,7 +86,7 @@ export default function LocalCompanyParser({ onResults }) {
       <label className="flex items-start gap-2 text-sm"><input required type="checkbox" checked={form.rights_confirmed} onChange={e => change('rights_confirmed', e.target.checked)}/>Подтверждаю права на хранение и обработку выбранных данных</label>
       <button className={button + ' bg-blue-700 text-white'} disabled={busy || !state.connected || !state.parser_available || active}>Начать поиск почт</button>
       {active && <span className="ml-3 text-sm text-gray-500">Один запуск уже выполняется. Для нового дождитесь его завершения или поставьте на паузу.</span>}
-    </form>
+    </form>}
     <section className="rounded-xl border bg-white p-5 space-y-4">
       <h2 className="text-lg font-semibold">Запуски и сохранённые выгрузки</h2>
       <p className="text-sm text-gray-500">Новые завершённые и приостановленные запуски импортируются автоматически. Старые выгрузки можно добавить кнопкой «Импортировать». Повторный импорт той же версии не создаёт новых записей.</p>
@@ -99,7 +99,7 @@ export default function LocalCompanyParser({ onResults }) {
         <div className="flex flex-wrap gap-2">
           {!r.saved && <button disabled={busy} className={button} onClick={() => run(() => api.post('/collector/local-parser/runs/' + r.id + '/' + (r.status === 'running' ? 'pause' : 'resume'), {}))}>{r.status === 'running' ? 'Пауза' : 'Продолжить'}</button>}
           {r.status !== 'running' && <button disabled={busy} className={button} onClick={() => r.saved ? setSavedImport(r.id) : importRun(r.id)}>Импортировать в Quickly</button>}
-          {r.job_id && <button className={button} onClick={() => onResults(r.job_id)}>Найденные почты</button>}
+          {r.job_id && <button className={button} onClick={() => onResults(r.job_id, r.source)}>Найденные почты</button>}
           <button className={button} onClick={() => setExpanded(expanded === r.id ? '' : r.id)}>Подробности</button>
         </div>
         {expanded === r.id && <div className="text-sm space-y-1">{r.tasks.map((t, i) => <p key={i}>{t.city} · {t.query}: {t.status}, карточек {t.count}{t.message ? ' — ' + t.message : ''}</p>)}</div>}

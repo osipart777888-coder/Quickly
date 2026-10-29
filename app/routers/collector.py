@@ -283,7 +283,18 @@ def filtered_query(q='', city='', region='', okved='', source='', status='', has
     if only_active: query = query.where(Company.active.is_(True))
     if employees_min is not None: query = query.where(Company.employees >= employees_min)
     if employees_max is not None: query = query.where(Company.employees <= employees_max)
-    if source: query = query.where(exists().where(CompanyObservation.company_id == Company.id, CompanyObservation.source == source))
+    if source:
+        keys = {'yandex': ['yandex', 'local_yandex'], 'twogis': ['twogis', 'local_2gis'],
+                'spark': ['spark', 'local_spark'], 'rusprofile': ['local_rusprofile']}.get(source, [source])
+        origin = exists().where(CompanyObservation.company_id == Company.id, CompanyObservation.source.in_(keys))
+        if source in {'import', 'fns'}:
+            # Imported files may preserve a directory's original provenance.
+            # They must still be reachable from the file-import result group.
+            imported = exists().where(CollectionResult.company_id == Company.id,
+                CollectionJob.id == CollectionResult.job_id,
+                cast(CollectionJob.params['sources'], Text).contains('"' + source + '"'))
+            origin = or_(origin, imported)
+        query = query.where(origin)
     if job_id:
         predicate = [CollectionResult.company_id == Company.id, CollectionResult.job_id == job_id]
         if exclude_existing: predicate.append(CollectionResult.was_existing.is_(False))
