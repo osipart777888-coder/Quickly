@@ -1916,6 +1916,9 @@ async def _sync_inbox_smtp(db: AsyncSession, inbox, reason: str = "") -> set[tup
             log.exception("failed firing token_expired webhook for SMTP inbox_id=%s", inbox.id)
         return touched
 
+    from app.notification_groups import resolve_imap_failure
+    await resolve_imap_failure(db, inbox.id)
+
     if new_validity != state.uidvalidity:
         state.uidvalidity = new_validity
         state.last_uid = 0

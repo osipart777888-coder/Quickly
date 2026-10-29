@@ -13,6 +13,7 @@ from app.auth import get_current_user
 from app.database import get_db
 from app.models import EmailNotificationConfig, Notification, WEBHOOK_EVENT_TYPES
 from app.notifications import get_unread_notification_count
+from app.notification_groups import mailbox_sync_summary, visible_notification
 
 log = logging.getLogger("quickly.notifications.routes")
 
@@ -22,6 +23,21 @@ router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
+
+class MailboxSyncDetail(BaseModel):
+    email: str
+    inbox_id: Optional[int] = None
+    status: str
+    occurrences: int
+    last_failed_at: datetime
+    recovered_at: Optional[datetime] = None
+
+
+class MailboxSyncSummary(BaseModel):
+    active_count: int
+    occurrences: int
+    mailboxes: list[MailboxSyncDetail]
+
 
 class NotificationItem(BaseModel):
     id: int
@@ -33,6 +49,7 @@ class NotificationItem(BaseModel):
     inbox_id: Optional[int] = None
     read_at: Optional[datetime] = None
     created_at: datetime
+    sync_summary: Optional[MailboxSyncSummary] = None
 
     class Config:
         from_attributes = True
@@ -74,7 +91,7 @@ async def list_notifications(
     db: AsyncSession = Depends(get_db),
 ):
     """List notifications for the current user."""
-    stmt = select(Notification).where(Notification.user_id == user.id)
+    stmt = select(Notification).where(Notification.user_id == user.id, visible_notification())
     if unread_only:
         stmt = stmt.where(Notification.read_at.is_(None))
     stmt = stmt.order_by(Notification.created_at.desc()).offset(offset).limit(limit)
@@ -84,14 +101,21 @@ async def list_notifications(
 
     # total count (always global, regardless of unread_only filter)
     total_result = await db.execute(
-        select(func.count(Notification.id)).where(Notification.user_id == user.id)
+        select(func.count(Notification.id)).where(Notification.user_id == user.id, visible_notification())
     )
     total = total_result.scalar() or 0
 
     unread = await get_unread_notification_count(db, user.id)
 
+    response_items = []
+    for n in items:
+        item = NotificationItem.from_orm(n)
+        summary = mailbox_sync_summary(n)
+        if summary is not None:
+            item.sync_summary = MailboxSyncSummary(**summary)
+        response_items.append(item)
     return NotificationListResponse(
-        items=[NotificationItem.from_orm(n) for n in items],
+        items=response_items,
         total=total,
         unread=unread,
     )
@@ -130,6 +154,7 @@ async def mark_all_read(
         select(Notification).where(
             Notification.user_id == user.id,
             Notification.read_at.is_(None),
+            visible_notification(),
         )
     )
     for notif in result.scalars().all():

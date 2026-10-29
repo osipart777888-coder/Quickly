@@ -70,8 +70,13 @@ const EVENT_CATEGORIES = {
   'system': ['daily_limit', 'rate_limit', 'token_expired', 'inbox.send_failing', 'feature.error'],
 };
 
+function notificationDate(iso) {
+  // Backend timestamps without an offset are UTC (app.time.utcnow).
+  return new Date(/[zZ]$|[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`);
+}
+
 function timeAgo(iso) {
-  const diff = Date.now() - new Date(iso).getTime();
+  const diff = Date.now() - notificationDate(iso).getTime();
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return 'just now';
   if (mins < 60) return `${mins}m ago`;
@@ -84,7 +89,8 @@ function timeAgo(iso) {
 function NotificationItem({ n, onRead, onDelete, navigate }) {
   const handleClick = () => {
     if (!n.read_at) onRead(n.id);
-    if (n.lead_id) navigate(`/leads/${n.lead_id}`);
+    if (n.sync_summary) navigate('/diagnostics');
+    else if (n.lead_id) navigate(`/leads/${n.lead_id}`);
     else if (n.campaign_id) navigate(`/campaigns/${n.campaign_id}`);
     else if (n.inbox_id) navigate(`/inboxes/${n.inbox_id}`);
     else if (n.event_type.startsWith('email.')) navigate('/analytics');
@@ -108,7 +114,30 @@ function NotificationItem({ n, onRead, onDelete, navigate }) {
         <p className={`text-sm ${n.read_at ? 'text-gray-700 dark:text-gray-300' : 'text-gray-900 dark:text-gray-100 font-semibold'}`}>
           {n.title}
         </p>
-        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">{n.message}</p>
+        <p className={`text-xs text-gray-500 dark:text-gray-400 mt-0.5 ${n.sync_summary ? '' : 'truncate'}`}>{n.message}</p>
+        {n.sync_summary && (
+          <details className="mt-3 text-xs cursor-auto" onClick={e => e.stopPropagation()}>
+            <summary className="cursor-pointer text-teal-600 dark:text-teal-300">
+              Состояние ящиков ({n.sync_summary.mailboxes.length})
+            </summary>
+            <ul className="mt-2 max-h-64 overflow-y-auto space-y-2" aria-label="Состояние синхронизации ящиков">
+              {n.sync_summary.mailboxes.map((mailbox, index) => (
+                <li key={mailbox.inbox_id ?? index} className="rounded border border-gray-200 dark:border-gray-700 p-2">
+                  <span className="font-medium break-all">{mailbox.email}</span>
+                  <p className="mt-1">{{
+                    recovered: 'Синхронизация восстановлена',
+                    removed: 'Ящик больше не подключён',
+                    auth_error: 'Нужно проверить данные входа IMAP',
+                    connection_error: 'Не удалось подключиться к IMAP; повторная проверка выполняется автоматически',
+                  }[mailbox.status]}</p>
+                  <p className="text-gray-500 dark:text-gray-400 mt-1">Сбоев в истории: {mailbox.occurrences}</p>
+                  <p className="text-gray-500 dark:text-gray-400">Последний сбой: {notificationDate(mailbox.last_failed_at).toLocaleString('ru-RU')}</p>
+                  {mailbox.recovered_at && <p className="text-gray-500 dark:text-gray-400">Восстановлено: {notificationDate(mailbox.recovered_at).toLocaleString('ru-RU')}</p>}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
         <div className="flex items-center gap-2 mt-1">
           <p className="text-[10px] text-gray-400">{timeAgo(n.created_at)}</p>
           {!n.read_at && (

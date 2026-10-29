@@ -346,3 +346,10 @@ async def init_db():
         if os.getenv("QUICKLY_REQUIRE_EXTERNAL_KEYS", "").lower() == "true":
             from app.local_secrets import encrypt_existing_local_secrets
             await encrypt_existing_local_secrets(session)
+
+    # Preserve legacy events while replacing repeated IMAP alerts in the
+    # notification center with a single summary. Safe to rerun on startup.
+    from app.notification_groups import consolidate_legacy_imap_notifications
+    async with AsyncSessionLocal() as session:
+        await consolidate_legacy_imap_notifications(session)
+        await session.commit()

@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import EmailNotificationConfig, Inbox, Notification, User
 from app import time as time_provider
 from app.settings_manager import settings
+from app.notification_groups import is_imap_failure, record_imap_failure, visible_notification
 
 log = logging.getLogger("quickly.notifications")
 
@@ -374,6 +375,7 @@ async def get_unread_notification_count(db: AsyncSession, user_id: int) -> int:
         select(func.count(Notification.id)).where(
             Notification.user_id == user_id,
             Notification.read_at.is_(None),
+            visible_notification(),
         )
     )
     return result.scalar() or 0
@@ -396,7 +398,7 @@ async def dispatch_notification(
     try:
         # Query all active users and their optional notification configs
         users_result = await db.execute(
-            select(User).where(User.is_active == True)  # noqa: E712
+            select(User).where(User.is_active == True).order_by(User.id)  # noqa: E712
         )
         users = users_result.scalars().all()
 
@@ -429,8 +431,14 @@ async def dispatch_notification(
         for user in users:
             config = config_map.get(user.id)
 
-            # In-app notification: always create (no event filtering for in-app)
-            await create_in_app_notification(db, user.id, event_type, data)
+            # Background IMAP retries update one incident summary, including
+            # across accounts. Only a new incident can trigger an email alert.
+            if is_imap_failure(event_type, data):
+                _, alert = await record_imap_failure(db, user.id, data)
+                if not alert:
+                    continue
+            else:
+                await create_in_app_notification(db, user.id, event_type, data)
 
             # Email channel: only if config exists, enabled, and event matches
             if config is None or not config.enabled:
