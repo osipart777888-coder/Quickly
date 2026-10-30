@@ -4,7 +4,7 @@ import io
 from sqlalchemy import func, select
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
-from app.collector.models import Company, CompanyContact, CompanyObservation, CollectorSource, ContactPermission, CollectionJob, CollectionResult
+from app.collector.models import Company, CompanyContact, CompanyObservation, CollectorSource, CollectionJob, CollectionResult
 from app.collector.repository import FIELDS
 
 
@@ -59,13 +59,13 @@ async def statistics(db, company_ids=None):
 
 EXPORT_FIELDS = ['emails', 'name', 'phones', 'website', 'city', 'address',
     *[field for field in FIELDS if field not in {'name', 'website', 'city', 'address'}],
-    'source_urls', 'sources', 'checked_at', 'status', 'consent', 'id']
+    'source_urls', 'sources', 'checked_at', 'status', 'id']
 EXPORT_LABELS = {'emails': 'Email', 'name': 'Компания', 'phones': 'Телефоны', 'website': 'Сайт',
     'city': 'Город', 'address': 'Адрес', 'inn': 'ИНН', 'kpp': 'КПП', 'ogrn': 'ОГРН',
     'okved_main': 'ОКВЭД', 'okved_extra': 'Другие ОКВЭД', 'okved_as_of': 'Дата ОКВЭД',
     'country': 'Страна', 'region': 'Регион', 'industry': 'Деятельность', 'employees': 'Численность',
     'active': 'Действующая', 'source_urls': 'Страницы источников', 'sources': 'Источники',
-    'checked_at': 'Дата проверки', 'status': 'Статус', 'consent': 'Согласие', 'id': 'ID'}
+    'checked_at': 'Дата проверки', 'status': 'Статус', 'id': 'ID'}
 
 
 async def export_bytes(db, companies, format):
@@ -76,11 +76,6 @@ async def export_bytes(db, companies, format):
         if not row or not row['emails']:
             omitted += 1
             continue
-        statuses = []
-        for email in row['emails']:
-            permission = await db.get(ContactPermission, email)
-            statuses.append(email + ': ' + (permission.status if permission else 'unknown'))
-        row['consent'] = '; '.join(statuses)
         rows.append([safe_cell('; '.join(map(str, row.get(field, []))) if isinstance(row.get(field), list) else row.get(field, '')) for field in EXPORT_FIELDS])
     if format == 'csv':
         stream = io.StringIO(newline='')

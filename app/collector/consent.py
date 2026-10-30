@@ -11,8 +11,8 @@ async def marketing_error(db, email):
     permission = await db.get(ContactPermission, email.lower())
     if not permission:
         return ''  # Existing unrelated Quickly contacts retain their old rules.
-    if permission.status != 'confirmed' or not permission.evidence or not permission.advertiser or not permission.granted_at or permission.granted_at > utcnow():
-        return 'Нет подтверждённого согласия этого адресата на рекламу от указанной компании'
+    if permission.status == 'refused':
+        return 'Получатель отказался от писем'
     return ''
 
 
@@ -59,10 +59,9 @@ async def transfer_to_quickly(db, company_ids, *, campaign_id=None):
         for email in emails:
             if email in seen: continue
             seen.add(email)
-            permission = await db.get(ContactPermission, email)
             suppressed = await db.get(Suppression, email)
             leads = list((await db.scalars(select(Lead).where(func.lower(Lead.email) == email))).all())
-            if suppressed or await marketing_error(db, email) or not permission or any(l.status in {'unsubscribed', 'invalid', 'bounced', 'blacklisted'} for l in leads):
+            if suppressed or await marketing_error(db, email) or any(l.status in {'unsubscribed', 'invalid', 'bounced', 'blacklisted'} for l in leads):
                 report['blocked'] += 1
                 continue
             lead = leads[0] if leads else None
@@ -71,9 +70,7 @@ async def transfer_to_quickly(db, company_ids, *, campaign_id=None):
             else:
                 lead = Lead(email=email, name=allowed['name'][:255], status='active', custom_data={
                     'company': allowed['name'], 'city': allowed.get('city', ''), 'okved': allowed.get('okved_main', ''),
-                    'collector_company_id': company.id, 'source': 'collector', 'consent_basis': permission.evidence,
-                    'consent_date': permission.granted_at.date().isoformat(), 'advertiser': permission.advertiser,
-                    'consent_evidence': permission.evidence_url})
+                    'collector_company_id': company.id, 'source': 'collector'})
                 db.add(lead)
                 await db.flush()
                 report['created'] += 1

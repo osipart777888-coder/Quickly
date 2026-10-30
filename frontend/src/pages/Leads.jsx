@@ -490,7 +490,7 @@ export default function Leads() {
                 />
               </th>
               <th className="p-2">Email</th>
-              <th className="p-2">Name</th><th className="p-2">Company / city</th><th className="p-2">Segment</th><th className="p-2">Permission</th>
+              <th className="p-2">Name</th><th className="p-2">Company / city</th><th className="p-2">Segment</th>
               <th className="p-2">Verify / enrollments</th>
               <th className="p-2">Campaigns</th>
               <th className="p-2">Sending inbox</th>
@@ -502,7 +502,7 @@ export default function Leads() {
           <tbody>
             {leads.length === 0 ? (
               <tr>
-                <td colSpan={tab === TAB_BOUNCED ? 12 : 10} className="p-8 text-center text-gray-500">
+                <td colSpan={tab === TAB_BOUNCED ? 11 : 9} className="p-8 text-center text-gray-500">
                   No leads match this view.
                 </td>
               </tr>
@@ -524,7 +524,7 @@ export default function Leads() {
                     </Link>
                   </td>
                   <td className="p-2 align-top">{l.name || '—'}</td>
-                  <td className="p-2 align-top">{l.custom_data?.company || '—'}<br/>{l.custom_data?.city || ''}</td><td className="p-2 align-top">{l.custom_data?.segment || '—'}</td><td className="p-2 align-top max-w-xs whitespace-normal text-xs">{l.custom_data?.consent_date || 'No date'}<br/>{l.custom_data?.consent_basis || 'No permission basis'}</td>
+                  <td className="p-2 align-top">{l.custom_data?.company || '—'}<br/>{l.custom_data?.city || ''}</td><td className="p-2 align-top">{l.custom_data?.segment || '—'}</td>
                   <td className="p-2 align-top">
                     <div className="flex flex-wrap gap-1">
                       {l.status && l.status !== 'active' && <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-700">{l.status}</span>}

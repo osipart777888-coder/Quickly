@@ -577,18 +577,21 @@ async def campaign_preflight(campaign_id: int, db=Depends(get_db)):
         errors.append('В кампании нет получателей')
     # Batch policy validation avoids N+1 round-trips for large campaigns.
     suppressed = set((await db.execute(select(Suppression.email))).scalars().all())
+    from app.collector.models import ContactPermission
+    from app.local_imports import email_address
+    from hashlib import sha256
+    refused = set((await db.scalars(select(ContactPermission.email).where(ContactPermission.status == 'refused'))).all())
     invalid = 0
     for lead in contacts:
-        data = lead.custom_data or {}
         try:
-            from datetime import date
-            valid_date = date.fromisoformat(str(data.get('consent_date', ''))[:10]).isoformat() <= day_bounds()[0]
+            email = email_address(lead.email)
         except ValueError:
-            valid_date = False
-        if lead.email.lower() in suppressed or lead.status in {'unsubscribed','invalid','bounced','blacklisted'} or not data.get('consent_basis') or not valid_date:
+            invalid += 1
+            continue
+        if email in suppressed or email in refused or 'sha256:' + sha256(email.encode()).hexdigest() in suppressed or lead.status in {'unsubscribed','invalid','bounced','blacklisted'}:
             invalid += 1
     if invalid:
-        errors.append(f'Контактов без разрешения или исключённых из отправки: {invalid}')
+        errors.append(f'Контактов, исключённых из отправки: {invalid}')
     control = await get_control(db)
     return {'ready': not errors, 'errors': errors, 'contacts': len(contacts), 'accounts': len(inboxes),
             'campaign_paused': campaign.paused, 'sending_enabled': control.campaigns_enabled and not control.emergency_stopped}

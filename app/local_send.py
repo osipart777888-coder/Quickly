@@ -60,16 +60,6 @@ async def contact_send_error(db, email, lead=None):
     contacts = (await db.execute(select(Lead).where(func.lower(Lead.email) == email))).scalars().all()
     if any(item.status in {'unsubscribed', 'invalid', 'bounced', 'blacklisted'} for item in contacts):
         return 'Получатель отписался, заблокирован или адрес недействителен'
-    if lead is not None:
-        data = lead.custom_data or {}
-        if not str(data.get('consent_basis', '')).strip() or not str(data.get('consent_date', '')).strip():
-            return 'Для контакта не указаны дата и основание разрешённой отправки'
-        try:
-            permission_date = datetime.fromisoformat(str(data['consent_date'])[:10]).date()
-            if permission_date.isoformat() > day_bounds()[0]:
-                return 'Дата разрешения на отправку ещё не наступила'
-        except ValueError:
-            return 'Нужна корректная дата разрешения в формате ГГГГ-ММ-ДД'
     return ''
 
 

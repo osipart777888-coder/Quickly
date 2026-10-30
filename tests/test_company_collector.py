@@ -151,18 +151,18 @@ async def test_paid_budget_debit_and_no_contact_field_without_explicit_access(se
 
 
 @pytest.mark.asyncio
-async def test_consent_required_transfer_paused_and_optout_blocks_future(session):
+async def test_transfer_without_confirmation_stays_paused_and_optout_blocks_future(session):
     await ensure_sources(session)
     company, _ = await save_company(session, record(), source='import', rights=RIGHTS)
     email = 'office1@test-fixture.ru'
     result = await transfer_to_quickly(session, [company.id])
-    assert result['created'] == 0 and result['blocked'] == 1
-    assert await marketing_error(session, email)
+    assert result['created'] == 1 and result['blocked'] == 0
+    assert not await marketing_error(session, email)
     with pytest.raises(ValueError): await set_permission(session, email, status='confirmed')
     await set_permission(session, email, status='confirmed', advertiser='Syntolk fixture', evidence='Signed consent fixture', evidence_url='consent-001', granted_at=utcnow()-timedelta(days=1))
     campaign = Campaign(name='Fixture campaign'); session.add(campaign); await session.flush()
     result = await transfer_to_quickly(session, [company.id], campaign_id=campaign.id)
-    assert result['created'] == 1 and result['enrolled'] == 1
+    assert result['existing'] == 1 and result['enrolled'] == 1
     assert (await session.scalar(select(CampaignLead))).sending_paused is True
     await set_permission(session, email, status='refused', evidence='Fixture opt out')
     assert await marketing_error(session, email)
@@ -264,10 +264,10 @@ async def test_new_api_requires_auth_and_never_returns_keys(session):
 
 
 @pytest.mark.asyncio
-async def test_consent_guard_blocks_campaign_before_transport(session, monkeypatch):
+async def test_explicit_optout_blocks_campaign_before_transport(session, monkeypatch):
     from app.local_send import guarded_send
     from app.sender import SendFailure
-    session.add(ContactPermission(email='new@test-fixture.ru', status='unknown'))
+    session.add(ContactPermission(email='new@test-fixture.ru', status='refused'))
     await session.flush()
     calls = []
     def send(**kwargs): calls.append(kwargs)
@@ -471,7 +471,7 @@ async def test_select_all_crosses_pages_and_export_respects_filters_and_exclusio
     assert {row['city'] for row in rows} == {'Москва'}
     assert 'office0@test-fixture.ru' not in {row['emails'] for row in rows}
     report = await transfer(selection, db=session, _admin=None)
-    assert report['blocked'] == 59 and report['created'] == 0  # existing consent checks still apply
+    assert report['blocked'] == 0 and report['created'] == 59
     captured = {}
     async def capture_transfer(db, company_ids, *, campaign_id=None):
         captured['ids'] = set((await db.scalars(company_ids)).all())

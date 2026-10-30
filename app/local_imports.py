@@ -99,8 +99,6 @@ async def import_contacts(db, rows):
                 continue
             seen.add(email)
             custom = {key: value for key, value in row.items() if key not in {'email', 'name'} and value != ''}
-            if custom.get('consent_date'):
-                date.fromisoformat(custom['consent_date'][:10])
             valid.append((email, row.get('name', ''), custom))
         except ValueError as exc:
             errors.append({'row': number, 'error': str(exc)})

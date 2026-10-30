@@ -80,7 +80,7 @@ async def test_committed_intent_not_replayed_after_lost_result(session):
 
 
 @pytest.mark.asyncio
-async def test_campaign_default_locked_and_requires_contact_permission(session):
+async def test_campaign_global_controls_still_apply_to_email_only_contact(session):
     inbox = await account(session)
     campaign = Campaign(name='Permission check')
     session.add(campaign)
@@ -96,10 +96,52 @@ async def test_campaign_default_locked_and_requires_contact_permission(session):
     await session.commit()
     result = await guarded_send(session, inbox, kind='campaign', campaign_id=campaign.id, send=sender,
                                 to_email=lead.email, lead=lead)
-    assert not result
-    lead.custom_data = {'consent_date': '2026-10-20', 'consent_basis': 'Запрос клиента на переписку'}
+    assert result
+    assert lead.custom_data == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status', [None, 'unknown', 'absent'])
+async def test_optional_confirmation_status_does_not_block_transport(session, monkeypatch, status):
+    from app.collector.models import ContactPermission
+    if status:
+        session.add(ContactPermission(email='receiver@local.test', status=status))
+        await session.flush()
+    calls = []
+    def send(**kwargs):
+        calls.append(kwargs)
+        return SendResult('<fake@local.test>')
+    monkeypatch.setenv('QUICKLY_LOCAL_INSTALL', 'false')
+    result = await guarded_send(session, None, kind='campaign', send=send, to_email='receiver@local.test')
+    assert result and len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_preflight_email_only_contact_passes_but_optout_and_tombstone_block(session, monkeypatch):
+    from hashlib import sha256
+    from app.routers.local import campaign_preflight
+    from app.collector.models import ContactPermission
+    from tests.conftest import make_sequence, make_campaign_inbox, make_campaign_lead
+    inbox = await account(session)
+    campaign = Campaign(name='Fixture preflight')
+    lead = Lead(email='receiver@local.test', custom_data={})
+    session.add_all([campaign, lead])
+    await session.flush()
+    await make_sequence(session, campaign.id)
+    await make_campaign_inbox(session, campaign.id, inbox.id)
+    await make_campaign_lead(session, campaign.id, lead.id)
     await session.commit()
-    assert await guarded_send(session, inbox, kind='campaign', campaign_id=campaign.id, send=sender, to_email=lead.email, lead=lead)
+    monkeypatch.setattr('app.local_send.public_links_error', lambda inbox: '')
+    report = await campaign_preflight(campaign.id, db=session)
+    assert report['ready'] and report['sending_enabled'] is False
+    permission = ContactPermission(email=lead.email, status='refused')
+    session.add(permission)
+    await session.flush()
+    assert not (await campaign_preflight(campaign.id, db=session))['ready']
+    permission.status = 'unknown'
+    session.add(Suppression(email='sha256:' + sha256(lead.email.encode()).hexdigest(), reason='Deleted contact'))
+    await session.flush()
+    assert not (await campaign_preflight(campaign.id, db=session))['ready']
 
 
 @pytest.mark.asyncio

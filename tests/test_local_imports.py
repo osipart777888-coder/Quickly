@@ -75,6 +75,12 @@ def test_syntax_and_idn_domain():
             email_address(address)
 
 
+@pytest.mark.asyncio
+async def test_legacy_confirmation_columns_are_optional_metadata(session):
+    result = await import_contacts(session, [{'email': 'legacy@example.ru', 'consent_date': 'not-a-date'}])
+    assert result['added'] == 1 and result['invalid'] == 0
+
+
 @pytest.mark.parametrize('reply, expected', [
     ('Не пишите мне больше', 'unsubscribed'), ('Не интересует, спасибо', 'not_interested'),
     ('Пришлите подробности', 'interested'), ('Я в отпуске', 'out_of_office'),
