@@ -57,11 +57,11 @@ def normalize_item(item: dict, task: dict) -> dict:
     city = next((x.get("name", "") for x in adm if x.get("type") == "city"), task["city"])
     region = next((x.get("name", "") for x in adm if x.get("type") == "region"), "")
     return {"id": identity, "source": "2gis", "inn": "", "name": item.get("name") or (item.get("name_ex") or {}).get("primary", ""),
-            "city": city, "region": region, "address": item.get("address_name", ""),
+            "city": city, "region": region, "country": task.get('country', 'Россия'), "country_code": task.get('country_code', 'ru'), "address": item.get("address_name", ""),
             "rubrics": [r.get("name", "") for r in item.get("rubrics") or []],
             "phones": sorted({c["value"] for c in contacts if c.get("type") == "phone" and c.get("value")}),
             "websites": websites, "emails": emails,
-            "source_url": f'https://2gis.ru/{task["city_code"]}/firm/{identity}'}
+            "source_url": f'https://2gis.{task.get("domain", "ru")}/{task["city_code"]}/firm/{identity}'}
 
 
 def normalize_contact(item: dict, task: dict) -> dict:
@@ -76,7 +76,7 @@ def normalize_contact(item: dict, task: dict) -> dict:
     if not reference:
         raise ValueError("Не указан источник контактов")
     result = {"id": f'{source}:{item["external_id"]}', "source": source, "inn": str(item.get("inn", "")),
-            "name": item["name"], "city": item.get("city") or (task["city"] if task["city"] != "Россия" else ""), "region": item.get("region", ""),
+            "name": item["name"], "country": task.get('country', 'Россия'), "country_code": task.get('country_code', 'ru'), "city": item.get("city") or (task["city"] if task["city"] != "Россия" else ""), "region": item.get("region", ""),
             "address": item.get("address", ""), "rubrics": item.get("rubrics", []),
             "phones": sorted(set(item.get("phones", []))),
             "websites": sorted({u for v in item.get("websites", []) if (u := contact_url(v))}),

@@ -59,11 +59,13 @@ def build_tasks(source: str, cities: list[dict], rubric_ids: list[str], queries:
         tasks = []
         for city in cities:
             for query in dict.fromkeys(queries or ["Юридические компании", "Услуги адвоката"]):
-                url = "https://yandex.ru/maps/?text=" + quote(query + " " + city["name"], safe="")
+                url = "https://yandex.ru/maps/?text=" + quote(query + " " + city.get("search_name", city["name"]), safe="")
                 if city.get("latitude") is not None and city.get("longitude") is not None:
                     point = f'{city["longitude"]},{city["latitude"]}'
                     url += "&" + urlencode({"ll": point, "sll": point, "z": 12, "lang": "ru_RU"})
-                tasks.append(new_task(source, url, query, limit, city["name"], city["code"]))
+                task = new_task(source, url, query, limit, city["name"], city["code"])
+                task.update(country=city.get('country', 'Россия'), country_code=city.get('country_code', 'ru'))
+                tasks.append(task)
         return tasks
     config = load_config(source)
     urls = urls or config.get("urls", [])

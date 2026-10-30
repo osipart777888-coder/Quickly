@@ -15,6 +15,7 @@ import subprocess
 import threading
 import time
 import uuid
+from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -44,6 +45,11 @@ def validate_request(data):
         raise ValueError('Подтвердите основание обработки данных')
     result = {key: str(data.get(key, '')).strip()[:size] for key, size in [('name', 255), ('query', 512), ('rights_basis', 2000)]}
     result.update(source=data['source'], rights_confirmed=True)
+    result['scope'] = data.get('scope', 'cities')
+    result['country_code'] = str(data.get('country_code', 'RU')).upper()
+    result['country'] = str(data.get('country', '')).strip()[:100]
+    if result['scope'] not in {'cities', 'country'} or not re.fullmatch('[A-Z]{2}', result['country_code']):
+        raise ValueError('Выберите страну и область поиска')
     for key, maximum in [('cities', 30), ('urls', 20), ('rubrics', 10)]:
         values = data.get(key, [])
         if not isinstance(values, list) or len(values) > maximum or any(not isinstance(v, str) or len(v) > 2048 for v in values):
@@ -57,7 +63,7 @@ def validate_request(data):
     result['visible'] = data.get('visible', False) is True
     result['crawl_websites'] = data.get('crawl_websites', True) is True
     if result['source'] in {'yandex', '2gis'}:
-        if not result['cities']: raise ValueError('Укажите хотя бы один город')
+        if result['scope'] == 'cities' and not result['cities']: raise ValueError('Укажите хотя бы один город')
         if not result['query'] and not (result['source'] == '2gis' and result['rubrics']):
             raise ValueError('Укажите поисковую фразу или рубрику 2ГИС')
     else:
@@ -125,7 +131,8 @@ class Bridge:
                     emails.setdefault(email, []).append(url)
                 row = {'external_id': identity, 'source': 'local_' + item.get('source', '2gis'),
                        'name': item.get('name', ''), 'inn': item.get('inn', ''), 'city': item.get('city', ''),
-                       'region': item.get('region', ''), 'address': item.get('address', ''), 'country': 'Россия',
+                       'region': item.get('region', ''), 'address': item.get('address', ''),
+                       'country': item.get('country') or read_json(directory / 'request.json', {}).get('country') or 'Россия',
                        'website': next(iter(item.get('websites') or []), ''), 'phones': item.get('phones', []),
                        'emails': sorted(emails), 'email_sources': emails, 'source_url': item.get('source_url', ''),
                        'industry': '; '.join(item.get('rubrics', []))}
@@ -152,10 +159,19 @@ class Bridge:
             finally: db.close()
         if not message and not active:
             message = next((t['message'] for t in reversed(tasks) if t['message']), '')
+        coverage = read_json(directory / 'geography.json', {})
+        if coverage and path.exists():
+            with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=2)) as geo_db:
+                statuses = {}
+                for payload, status in geo_db.execute('SELECT payload,status FROM tasks'):
+                    task = json.loads(payload)
+                    statuses.setdefault(task.get('city_code') or task.get('city'), []).append(status)
+                coverage.update(visited=sum(any(s != 'pending' for s in values) for values in statuses.values()),
+                                completed=sum(all(s in {'done', 'empty'} for s in values) for values in statuses.values()))
         return {'id': run_id, 'name': request.get('name') or directory.name, 'source': request.get('source') or (next(iter(read_json(directory / 'plan.json', [{}])), {}).get('source', '2gis')),
                 'status': state, 'message': message[:500], 'stats': stats, 'tasks': tasks,
                 'checkpoint': (directory / 'worker-result.json').stat().st_mtime_ns if (directory / 'worker-result.json').exists() else 0,
-                'request': request, 'saved': run_id.startswith('saved-'), 'created': directory.stat().st_mtime}
+                'request': request, 'coverage': coverage, 'saved': run_id.startswith('saved-'), 'created': directory.stat().st_mtime}
 
     def runs(self):
         ids = [p.name for p in self.directory.iterdir() if re.fullmatch(r'[a-f0-9]{32}', p.name) and (p / 'request.json').exists()]
@@ -174,7 +190,12 @@ class Bridge:
         if str(self.root) not in sys.path: sys.path.insert(0, str(self.root))
         from company_emails.catalog import load_cities
         from company_emails.sources import build_tasks
-        if request['source'] == '2gis':
+        plan, coverage = None, None
+        if request['source'] in {'yandex', '2gis'} and (request['scope'] == 'country' or request['country_code'] != 'RU'):
+            from company_emails.world import resolve
+            cities, coverage = resolve(self.root, request)
+            plan = build_tasks(request['source'], cities, request['rubrics'], [request['query']] if request['query'] else [], request['limit'])
+        elif request['source'] == '2gis':
             catalogue = load_cities()
             cities = []
             for name in request['cities']:
@@ -190,6 +211,8 @@ class Bridge:
             run_id = uuid.uuid4().hex
             directory = self.directory / run_id
             write_json(directory / 'request.json', request)
+            if plan is not None: write_json(directory / 'plan.json', plan)
+            if coverage: write_json(directory / 'geography.json', coverage)
             self.launch(directory)
             return self.describe(run_id)
 
@@ -229,8 +252,17 @@ class Bridge:
             else: raise ValueError('Неизвестное действие')
             return self.describe(run_id)
 
-    def catalog(self, source, query, kind):
+    def catalog(self, source, query, kind, country_code='RU'):
         if source not in {'yandex', '2gis'}: raise ValueError('Каталог доступен для карт')
+        code = country_code.upper()
+        if not re.fullmatch('[A-Z]{2}', code): raise ValueError('Некорректный код страны')
+        if kind == 'countries' or (kind == 'cities' and code != 'RU'):
+            import sys
+            if str(self.root) not in sys.path: sys.path.insert(0, str(self.root))
+            from company_emails.world import countries, map_cities
+            if kind == 'countries': return countries(self.root, source)
+            return [{'code': c['code'], 'name': c['name']} for c in map_cities(self.root, source, code)
+                    if query.casefold() in (c['name'] + ' ' + c.get('ascii', '')).casefold()][:1200]
         path = self.root / ('data/yandex-cities.json' if source == 'yandex' else 'vendor/parser_2gis/data/cities.json')
         if kind == 'rubrics':
             rubrics = read_json(self.root / 'vendor/parser_2gis/data/rubrics.json', {})
@@ -271,7 +303,7 @@ class Handler(BaseHTTPRequestHandler):
                 elif parts == ['runs']: result = bridge.runs()
                 elif parts == ['catalog']:
                     query = parse_qs(route.query)
-                    result = bridge.catalog(query.get('source', ['yandex'])[0], query.get('q', [''])[0][:200], query.get('kind', ['cities'])[0])
+                    result = bridge.catalog(query.get('source', ['yandex'])[0], query.get('q', [''])[0][:200], query.get('kind', ['cities'])[0], query.get('country_code', ['RU'])[0])
                 elif len(parts) == 3 and parts[0] == 'runs' and parts[2] == 'snapshot': result = bridge.snapshot(parts[1])
                 else: self.respond(404, {'detail': 'Не найдено'}); return
             else:

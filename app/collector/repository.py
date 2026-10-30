@@ -12,6 +12,8 @@ FIELDS = ['name', 'inn', 'kpp', 'ogrn', 'okved_main', 'okved_extra', 'okved_as_o
 
 def identity_conflict(company, record):
     # Even a shared OGRN/domain must not combine distinct known branches/KPP.
+    if company.country and record.get('country') and normalized_text(company.country) != normalized_text(record['country']):
+        return True
     return any(getattr(company, key) and record.get(key) and getattr(company, key) != record[key]
                for key in ['inn', 'kpp', 'ogrn'])
 

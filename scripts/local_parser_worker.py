@@ -26,7 +26,11 @@ def run(parser_root, directory):
                 tasks = json.loads((directory / 'plan.json').read_text())
             else:
                 cities = []
-                if source == 'yandex':
+                if source in {'yandex', '2gis'} and (request.get('scope') == 'country' or request.get('country_code', 'RU') != 'RU'):
+                    from company_emails.world import resolve
+                    cities, coverage = resolve(parser_root, request)
+                    atomic_json(directory / 'geography.json', coverage)
+                elif source == 'yandex':
                     cities = select_yandex_cities(yandex_cities(), request['cities'])
                 elif source == '2gis':
                     catalogue = load_cities()
@@ -58,17 +62,23 @@ def run(parser_root, directory):
             for task in tasks:
                 count = store.summary()['companies']
                 if count >= request['limit']:
+                    result = {'status': 'limited', 'message': 'Достигнут общий лимит карточек за запуск. Непроверенные города остаются в плане; полный обход страны не завершён.'}
                     break
                 task = dict(task, limit=request['limit'] - count + store.task_count(task['id']))
                 ok = collect(store, [task], timeout=request['timeout'], visible=request['visible'],
                              delay=request['delay'], retry_failed=True)
                 if not ok:
                     states = store.summary()['tasks']
+                    if request.get('scope') == 'country' and not states.get('needs_auth') and not states.get('interrupted'):
+                        result = {'status': 'completed_with_errors', 'message': 'Часть городов недоступна; подробности сохранены в истории.'}
+                        continue
                     result = {'status': 'needs_auth' if states.get('needs_auth') else 'paused' if states.get('interrupted') else 'error',
                               'message': next((r[0] for r in store.db.execute("SELECT message FROM tasks WHERE message != '' ORDER BY updated DESC LIMIT 1")), 'Сбор приостановлен')}
                     break
             if result['status'] == 'completed' and any(store.summary()['tasks'].get(s) for s in ['partial', 'error', 'timeout']):
                 result['status'] = 'completed_with_errors'
+            if result['status'] == 'completed' and store.summary()['tasks'].get('limited'):
+                result = {'status': 'limited', 'message': 'Достигнут лимит карточек. Доступная выдача карт может быть больше собранной.'}
     except KeyboardInterrupt:
         result = {'status': 'paused', 'message': 'Остановлено пользователем, прогресс сохранён'}
     except Exception as error:

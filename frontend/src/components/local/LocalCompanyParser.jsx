@@ -4,7 +4,7 @@ import { api } from '../../api';
 const input = 'block w-full rounded-md border border-gray-300 bg-transparent p-2 text-sm';
 const button = 'rounded-md border border-gray-300 px-3 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed';
 const labels = { yandex: 'Яндекс Карты', '2gis': '2ГИС', spark: 'СПАРК', rusprofile: 'Rusprofile' };
-const states = { running: 'Собирает карточки', completed: 'Сбор завершён', completed_with_errors: 'Завершён с ошибками', paused: 'На паузе', error: 'Ошибка', needs_auth: 'Нужна проверка доступа', interrupted: 'Прерван — можно продолжить', saved: 'Старая выгрузка' };
+const states = { running: 'Собирает карточки', completed: 'Сбор завершён', limited: 'Достигнут лимит карточек', completed_with_errors: 'Завершён с ошибками', paused: 'На паузе', error: 'Ошибка', needs_auth: 'Нужна проверка доступа', interrupted: 'Прерван — можно продолжить', saved: 'Старая выгрузка' };
 function emailStage(run) {
   if (run.status === 'running') return 'Сбор карточек компаний';
   const progress = run.email_progress;
@@ -95,9 +95,10 @@ export default function LocalCompanyParser({ onResults, historyOnly = false }) {
         <div className="flex justify-between gap-3"><strong className="break-all">{r.name}</strong><span className="text-sm whitespace-nowrap">{emailStage(r)}</span></div>
         <p className="text-sm">{labels[r.source] || r.source} · Проверено карточек: {r.stats.companies} · Уникальных email: {r.email_progress?.unique_emails ?? r.stats.emails}{r.email_progress ? ` · Компаний с почтой: ${r.email_progress.with_email}` : ''}</p>
         {r.email_progress && <p className="text-sm text-gray-500">Проверено сайтов: {r.email_progress.sites_checked} · В очереди: {r.email_progress.sites_pending} · Недоступно: {r.email_progress.sites_failed}</p>}
+        {r.coverage?.planned > 0 && <div className="text-sm space-y-1"><p>{r.coverage.country} · Посещено населённых пунктов: {r.coverage.visited || 0} / {r.coverage.planned} · Полностью проверено: {r.coverage.completed || 0}</p><p className="text-xs text-gray-500">{r.coverage.note}</p></div>}
         {r.message && <p className="text-sm text-red-700 whitespace-pre-wrap">{r.message}</p>}
         <div className="flex flex-wrap gap-2">
-          {!r.saved && <button disabled={busy} className={button} onClick={() => run(() => api.post('/collector/local-parser/runs/' + r.id + '/' + (r.status === 'running' ? 'pause' : 'resume'), {}))}>{r.status === 'running' ? 'Пауза' : 'Продолжить'}</button>}
+          {!r.saved && r.status !== 'limited' && <button disabled={busy} className={button} onClick={() => run(() => api.post('/collector/local-parser/runs/' + r.id + '/' + (r.status === 'running' ? 'pause' : 'resume'), {}))}>{r.status === 'running' ? 'Пауза' : 'Продолжить'}</button>}
           {r.status !== 'running' && <button disabled={busy} className={button} onClick={() => r.saved ? setSavedImport(r.id) : importRun(r.id)}>Импортировать в Quickly</button>}
           {r.job_id && <button className={button} onClick={() => onResults(r.job_id, r.source)}>Найденные почты</button>}
           <button className={button} onClick={() => setExpanded(expanded === r.id ? '' : r.id)}>Подробности</button>

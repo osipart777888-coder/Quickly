@@ -186,8 +186,33 @@ def test_worker_global_limit_and_pause_resume(tmp_path, monkeypatch):
     worker.run(parser_root, directory)
     assert json.loads((directory / 'worker-result.json').read_text())['status'] == 'paused'
     worker.run(parser_root, directory)
-    assert json.loads((directory / 'worker-result.json').read_text())['status'] == 'completed'
+    assert json.loads((directory / 'worker-result.json').read_text())['status'] == 'limited'
     store = Store(directory)
     try: assert store.summary()['companies'] == data['limit']
     finally: store.close()
     assert calls == [3, 3]  # already saved row is included in the resumed task cap
+
+
+def test_country_scope_accepts_no_manual_cities_and_preserves_country():
+    request = bridge_module.validate_request(valid() | {'scope': 'country', 'country_code': 'UZ', 'country': 'Узбекистан', 'cities': []})
+    assert request['country_code'] == 'UZ' and request['cities'] == [] and request['scope'] == 'country'
+    for change in [{'scope': 'unknown'}, {'country_code': '../'}]:
+        with pytest.raises(ValueError): bridge_module.validate_request(valid() | change)
+
+
+def test_foreign_snapshot_preserves_country_and_coverage(tmp_path):
+    root = tmp_path / 'parser'
+    root.mkdir()
+    runs = tmp_path / 'runs'
+    directory = runs / ('c' * 32)
+    db = make_database(directory)
+    item = json.loads(db.execute('SELECT payload FROM companies').fetchone()[0])
+    item['country'] = 'Узбекистан'
+    db.execute('UPDATE companies SET payload=?', (json.dumps(item),))
+    db.commit(); db.close()
+    bridge_module.write_json(directory / 'request.json', valid() | {'country': 'Узбекистан', 'scope': 'country'})
+    bridge_module.write_json(directory / 'geography.json', {'country': 'Узбекистан', 'planned': 2})
+    bridge = bridge_module.Bridge({'parser_root': str(root)}, runs)
+    assert bridge.snapshot('c' * 32)['rows'][0]['country'] == 'Узбекистан'
+    coverage = bridge.describe('c' * 32)['coverage']
+    assert coverage['planned'] == 2 and coverage['visited'] == 1 and coverage['completed'] == 1

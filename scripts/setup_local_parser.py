@@ -52,6 +52,7 @@ def main():
         subprocess.run([str(Path(sys.executable).resolve()), '-m', 'venv', str(runtime / '.venv')], check=True)
         subprocess.run([str(python), '-m', 'pip', 'install', '-r', str(runtime / 'requirements.txt')], check=True)
     subprocess.run([str(python), '-c', 'import pychrome, psutil, requests, xlsxwriter'], check=True)
+    subprocess.run([str(python), '-c', 'from pathlib import Path; from company_emails.world import install; install(Path.cwd())'], cwd=runtime, check=True)
     config.update(parser_root=str(runtime), original_root=str(source), port=config.get('port', 8877), api_key=config.get('api_key') or secrets.token_urlsafe(32))
     config['base_url'] = 'http://host.docker.internal:' + str(config['port'])
     # Private file is mounted read-only into Quickly. No tokens in arguments/logs.

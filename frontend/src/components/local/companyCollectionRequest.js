@@ -21,6 +21,9 @@ export function collectionRequest(source, method, params, options = {}) {
   if (definition.parser && (method === 'browser' || source === 'rusprofile')) {
     return { path: '/collector/local-parser/runs', upload: false, body: {
       source: definition.parser, name: params.name, query: params.query,
+      scope: ['yandex', 'twogis'].includes(source) ? params.scope || 'cities' : 'cities',
+      country_code: ['yandex', 'twogis'].includes(source) ? params.country_code || 'RU' : 'RU',
+      country: ['yandex', 'twogis'].includes(source) ? params.country || '' : 'Россия',
       cities: (params.cities || []).map(value => value.trim()).filter(Boolean), limit: params.limit,
       rubrics: split(options.rubrics), urls: String(options.urls || '').split('\n').map(value => value.trim()).filter(Boolean),
       timeout: options.timeout ?? 900, delay: options.delay ?? 1, visible: Boolean(options.visible),

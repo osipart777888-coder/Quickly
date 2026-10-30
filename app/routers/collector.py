@@ -27,6 +27,9 @@ class LocalParserInput(BaseModel):
     name: str = Field(default='Локальный сбор', max_length=255)
     query: str = Field(default='', max_length=512)
     cities: list[str] = Field(default_factory=list, max_length=30)
+    scope: Literal['cities', 'country'] = 'cities'
+    country_code: str = Field(default='RU', pattern='^[A-Za-z]{2}$')
+    country: str = Field(default='', max_length=100)
     rubrics: list[str] = Field(default_factory=list, max_length=10)
     urls: list[str] = Field(default_factory=list, max_length=20)
     limit: int = Field(default=100, ge=1, le=10000)
@@ -62,10 +65,10 @@ async def local_parser_status(db=Depends(get_db)):
 
 
 @router.get('/local-parser/catalog')
-async def local_parser_catalog(source: Literal['yandex', '2gis'] = 'yandex', q: str = Query('', max_length=200), kind: Literal['cities', 'rubrics'] = 'cities'):
+async def local_parser_catalog(source: Literal['yandex', '2gis'] = 'yandex', q: str = Query('', max_length=200), kind: Literal['cities', 'rubrics', 'countries'] = 'cities', country_code: str = Query('RU', pattern='^[A-Za-z]{2}$')):
     from urllib.parse import urlencode
     from app.collector.local_parser import request
-    try: return await request('GET', '/catalog?' + urlencode({'source': source, 'q': q, 'kind': kind}))
+    try: return await request('GET', '/catalog?' + urlencode({'source': source, 'q': q, 'kind': kind, 'country_code': country_code}))
     except SourceError as error: raise HTTPException(503, str(error))
 
 

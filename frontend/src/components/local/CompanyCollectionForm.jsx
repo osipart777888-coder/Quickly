@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../../api';
 
 import { collectionSources } from './companyCollectionRequest';
+import { countryLabels, parseCountryCommand } from './countryCollection';
 
 const input = 'block w-full rounded-md border border-gray-300 bg-transparent p-2 text-sm';
 const button = 'rounded-md border border-gray-300 px-3 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed';
@@ -10,9 +11,13 @@ function Field({ title, children }) { return <label className="block text-sm fon
 export default function CompanyCollectionForm({ params, change, source, onSource, method, onMethod, options, onOptions, sources, file, onFile, busy, onSubmit, onAccess, onSettings }) {
   const [parser, setParser] = useState({ connected: false, runs: [], message: 'Проверка соединения…' });
   const [cities, setCities] = useState([]);
+  const [countries, setCountries] = useState([]), [countryError, setCountryError] = useState('');
+  const [command, setCommand] = useState(''), [commandMessage, setCommandMessage] = useState('');
   const definition = collectionSources.find(item => item.key === source);
   const browser = Boolean(definition.parser && (method === 'browser' || source === 'rusprofile'));
   const maps = source === 'yandex' || source === 'twogis';
+  const wholeCountry = maps && browser && params.scope === 'country';
+  const country = countries.find(value => value.code === (params.country_code || 'RU'));
   const upload = source === 'import' || source === 'fns';
   const active = parser.runs.some(run => run.status === 'running');
   const apiSource = sources.find(item => item.key === source);
@@ -25,11 +30,20 @@ export default function CompanyCollectionForm({ params, change, source, onSource
     return () => { cancelled = true; clearInterval(timer); };
   }, []);
   useEffect(() => {
-    if (!browser || !maps || !parser.connected) { setCities([]); return; }
+    if (!browser || !maps || !parser.connected) return;
     let cancelled = false;
-    api.get('/collector/local-parser/catalog?source=' + definition.parser).then(value => { if (!cancelled) setCities(value); }).catch(() => {});
+    setCountryError('');
+    api.get('/collector/local-parser/catalog?kind=countries&source=' + definition.parser)
+      .then(values => { if (!cancelled) setCountries(countryLabels(values)); })
+      .catch(error => { if (!cancelled) setCountryError(error.message); });
     return () => { cancelled = true; };
   }, [browser, maps, definition.parser, parser.connected]);
+  useEffect(() => {
+    if (!browser || !maps || !parser.connected || wholeCountry) { setCities([]); return; }
+    let cancelled = false;
+    api.get('/collector/local-parser/catalog?source=' + definition.parser + '&country_code=' + (params.country_code || 'RU')).then(value => { if (!cancelled) setCities(value); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [browser, maps, definition.parser, parser.connected, params.country_code, wholeCountry]);
 
   return <form onSubmit={onSubmit} className="rounded-xl border border-gray-200 bg-white p-5 space-y-5" aria-label="Новый сбор компаний">
     <fieldset className="space-y-2">
@@ -39,10 +53,27 @@ export default function CompanyCollectionForm({ params, change, source, onSource
     </fieldset>
     {browser && <p role="status" className="text-sm text-gray-500">{!parser.connected ? parser.message : !parser.parser_available ? 'Парсер недоступен. Проверьте его установку на Mac.' : active ? 'Один сбор уже выполняется. Его состояние и кнопка паузы — в «Истории запусков».' : 'Сбор через браузер на этом Mac. Подключение готово.'}</p>}
     {apiBlocked && <div role="status" className="rounded border p-3 text-sm">{apiSource?.message || 'Настройте подключение к API.'} <button type="button" className="underline" onClick={onSettings}>Настройки источников</button></div>}
+    {maps && browser && <section className="rounded-lg border p-4 space-y-3" aria-label="География поиска">
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className="text-sm font-medium"><label htmlFor="collection-country">Страна поиска</label><select id="collection-country" className={input} value={params.country_code || 'RU'} disabled={!countries.length} onChange={event => { const selected = countries.find(value => value.code === event.target.value); change('country_code', selected.code); change('country', selected.label); change('cities', []); setCommandMessage(''); }}>
+          {!countries.length && <option value={params.country_code || 'RU'}>{countryError ? 'Каталог стран недоступен' : 'Загрузка стран…'}</option>}
+          {countries.map(value => <option key={value.code} value={value.code}>{value.label}</option>)}
+        </select></div>
+        <div className="text-sm font-medium"><label htmlFor="collection-scope">Где искать</label><select id="collection-scope" className={input} value={params.scope || 'cities'} onChange={event => { change('scope', event.target.value); setCommandMessage(''); if (event.target.value === 'country' && params.limit === 100) change('limit', 10000); }}><option value="cities">Выбранные города</option><option value="country">Вся страна</option></select></div>
+      </div>
+      <div className="flex flex-wrap gap-2 items-end"><div className="flex-1 min-w-0 basis-64 text-sm"><label htmlFor="collection-command">Или задайте запрос одной строкой</label><input id="collection-command" className={input} value={command} placeholder="Собери почты строительных компаний по всему Узбекистану" onChange={event => setCommand(event.target.value)} /></div>
+        <button type="button" className={button} disabled={!countries.length || !command.trim()} onClick={() => { try { const values = parseCountryCommand(command, countries); if (params.limit === 100) values.limit = 10000; Object.entries(values).forEach(([key, value]) => change(key, value)); setCommandMessage(`Выбрано: ${values.country}; тематика: ${values.query}. Проверьте параметры и нажмите «Начать поиск почт».`); } catch (error) { setCommandMessage(error.message); } }}>Заполнить параметры</button>
+      </div>
+      {commandMessage && <p role="status" className="text-sm">{commandMessage}</p>}
+      {countryError && <p role="alert" className="text-sm text-red-700">{countryError}</p>}
+      {wholeCountry && country && <p className="text-sm">План: {country.source_cities} населённых пунктов выбранной страны. Города будут обходиться автоматически. Лимит карточек ниже действует на весь запуск.</p>}
+      {wholeCountry && country?.source_cities === 0 && <p role="alert" className="text-sm text-red-700">У этого источника нет покрытия выбранной страны. Выберите Яндекс Карты или другой источник.</p>}
+      {wholeCountry && <p className="text-xs text-gray-500">География Яндекс Карт: <a className="underline" href="https://www.geonames.org/export/" target="_blank" rel="noreferrer">GeoNames, CC BY 4.0</a> — населённые пункты от 500 жителей и административные центры. Полнота компаний зависит от выдачи карт; прогресс обхода виден в истории.</p>}
+    </section>}
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
       <Field title="Название запуска"><input required className={input} value={params.name} onChange={event => change('name', event.target.value)}/></Field>
       <Field title="Сколько карточек проверить"><input required type="number" min="1" max="10000" className={input} value={params.limit} onChange={event => change('limit', Number(event.target.value))}/></Field>
-      {maps && <Field title="Города через точку с запятой"><input required={browser} className={input} list="collection-cities" value={params.cities.join('; ')} onChange={event => change('cities', event.target.value.split(';').map(value => value.trim()))}/><datalist id="collection-cities">{cities.map(city => <option key={city.code} value={city.name}/>)}</datalist></Field>}
+      {maps && !wholeCountry && <Field title="Города через точку с запятой"><input required={browser} className={input} list="collection-cities" value={params.cities.join('; ')} onChange={event => change('cities', event.target.value.split(';').map(value => value.trim()))}/><datalist id="collection-cities">{cities.map(city => <option key={city.code} value={city.name}/>)}</datalist></Field>}
       {(maps || (!browser && definition.parser)) && <Field title="Тематика / поисковая фраза"><input className={input} required={!browser || source !== 'twogis' || !options.rubrics.trim()} placeholder="Например: юридические компании" value={params.query} onChange={event => change('query', event.target.value)}/></Field>}
     </div>
     {browser && !maps && <div className="space-y-3">
@@ -71,6 +102,6 @@ export default function CompanyCollectionForm({ params, change, source, onSource
     <p className="text-sm text-gray-500">В результаты попадают только компании с найденным email. Итоговое число может быть меньше количества проверенных карточек. Результаты каждого источника показываются отдельно.</p>
     <Field title="Основание права обработки и хранения"><input required maxLength="2000" className={input} value={params.rights_basis} onChange={event => change('rights_basis', event.target.value)} placeholder="Собственные данные / договор / разрешение владельца"/></Field>
     <label className="flex items-start gap-2 text-sm"><input required type="checkbox" checked={params.rights_confirmed} onChange={event => change('rights_confirmed', event.target.checked)}/>Подтверждаю права на хранение и обработку выбранных данных</label>
-    <button type="submit" disabled={busy || !params.rights_confirmed || apiBlocked || (browser && (!parser.connected || !parser.parser_available || active))} className={`${button} bg-blue-700 text-white`}>Начать поиск почт</button>
+    <button type="submit" disabled={busy || !params.rights_confirmed || apiBlocked || (wholeCountry && (!country || !country.source_cities)) || (browser && (!parser.connected || !parser.parser_available || active))} className={`${button} bg-blue-700 text-white`}>Начать поиск почт</button>
   </form>;
 }

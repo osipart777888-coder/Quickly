@@ -51,3 +51,4 @@ local-data/
 integrations/company_parser/.venv/
 integrations/company_parser/.local/
 integrations/company_parser/runs/
+integrations/company_parser/data/world-geography.sqlite
