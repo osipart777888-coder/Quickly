@@ -108,6 +108,11 @@ class InboxCreate(BaseModel):
     ramp_up_step_size: int = 1
 
 
+class InboxDailyLimitUpdate(BaseModel):
+    inbox_ids: List[int] = Field(..., min_length=1, max_length=10000)
+    max_emails_per_day: int = Field(..., ge=1, le=100000)
+
+
 class InboxUpdate(BaseModel):
     display_name: Optional[str] = None
     max_emails_per_day: Optional[int] = None

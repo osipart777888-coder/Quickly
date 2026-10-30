@@ -23,6 +23,7 @@ from app.schemas import (
     BeaconPendingRegistrationCountResponse,
     ConnectUrlResponse,
     InboxCreate,
+    InboxDailyLimitUpdate,
     InboxUpdate,
     InboxResponse,
     PauseInboxRequest,
@@ -284,6 +285,31 @@ async def create_inbox(data: InboxCreate, db: AsyncSession = Depends(get_db)):
     inbox.effective_max_per_day = _compute_effective_limit(inbox)
     await _maybe_complete_ramp_up(inbox, db)
     return inbox
+
+
+@router.post("/daily-limit")
+async def update_daily_limits(
+    data: InboxDailyLimitUpdate,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    ids = sorted(set(data.inbox_ids))
+    inboxes = (await db.execute(
+        select(Inbox).where(Inbox.id.in_(ids)).order_by(Inbox.id).with_for_update()
+    )).scalars().all()
+    if len(inboxes) != len(ids):
+        raise HTTPException(404, 'Один из выбранных ящиков больше не существует. Обновите список и повторите.')
+
+    changed = 0
+    for inbox in inboxes:
+        if inbox.max_emails_per_day != data.max_emails_per_day:
+            inbox.max_emails_per_day = data.max_emails_per_day
+            changed += 1
+    if changed:
+        await db.commit()
+        from app.routers.schedule import enqueue_global_recalculate
+        enqueue_global_recalculate(background_tasks)
+    return {'updated': len(inboxes), 'changed': changed, 'max_emails_per_day': data.max_emails_per_day}
 
 
 @router.get("/{inbox_id}", response_model=InboxResponse)
