@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react';
 import { api } from '../../api';
 import { Link } from 'react-router-dom';
 
-export default function AccountOverview({compact=false}) {
+export default function AccountOverview({compact=false, refreshRevision=0}) {
   const [data,setData]=useState(null), [error,setError]=useState(''), [busy,setBusy]=useState(null);
   async function load(){try{setData(await api.get('/local/overview'));}catch(e){setError(e.message);}}
-  useEffect(()=>{load();const timer=setInterval(load,30000);return()=>clearInterval(timer);},[]);
+  useEffect(()=>{load();const timer=setInterval(load,30000);return()=>clearInterval(timer);},[refreshRevision]);
   async function test(id, provider){setBusy(id);setError('');try{const report=await api.post(provider==='smtp'?`/smtp/inboxes/${id}/test`:`/local/accounts/${id}/test`,{}); if(!report.ok)setError([report.smtp?.error,report.imap?.error].filter(Boolean).join('; '));await load();}catch(e){setError(e.message);}finally{setBusy(null);}}
   if(!data)return <p>{error || 'Loading account status…'}</p>;
   return <section className="rounded-xl border bg-white p-4 space-y-3">

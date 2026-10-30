@@ -60,3 +60,29 @@ async def test_get_single_inbox_returns_sent_today(session):
     # invoke the router function directly instead of an HTTP call
     obj = await inbox_router.get_inbox(inbox.id, db=session)
     assert obj.sent_today == 1
+
+
+@pytest.mark.asyncio
+async def test_daily_limit_patch_changes_only_selected_mailbox_limit(session, monkeypatch):
+    from fastapi import BackgroundTasks
+    from app.schemas import InboxUpdate
+    from app.routers import schedule
+
+    recalculations = []
+    monkeypatch.setattr(schedule, 'enqueue_global_recalculate', lambda tasks: recalculations.append(tasks))
+    inbox = Inbox(email='selected@example.com', display_name='Отправитель', provider='smtp',
+                  max_emails_per_day=5, wait_minutes_between=13, max_jitter_seconds=77, paused=True)
+    other = Inbox(email='other@example.com', max_emails_per_day=9)
+    session.add_all([inbox, other])
+    await session.commit()
+
+    tasks = BackgroundTasks()
+    await inbox_router.update_inbox(inbox.id, InboxUpdate(max_emails_per_day=20), tasks, db=session)
+    await session.refresh(inbox)
+    await session.refresh(other)
+
+    assert inbox.max_emails_per_day == 20
+    assert inbox.display_name == 'Отправитель' and inbox.provider == 'smtp'
+    assert inbox.wait_minutes_between == 13 and inbox.max_jitter_seconds == 77 and inbox.paused
+    assert other.max_emails_per_day == 9
+    assert recalculations == [tasks]

@@ -1,4 +1,5 @@
 import AccountTools from '../components/local/AccountTools';
+import DailyLimitSettings from '../components/local/DailyLimitSettings';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { api, apiCache } from '../api';
 import { Button } from '../components/ui/Button';
@@ -647,6 +648,7 @@ function InboxTrackingOptions({
 
 export default function Inboxes() {
   const [inboxes, setInboxes] = useState(() => apiCache.get('/inboxes') || []);
+  const [limitRevision, setLimitRevision] = useState(0);
   const [cnameTarget, setCnameTarget] = useState('');
   const [customTrackingCnameUiEnabled, setCustomTrackingCnameUiEnabled] = useState(true);
   // state used for both add and edit forms
@@ -1563,7 +1565,8 @@ export default function Inboxes() {
         </Button>
       </div>
 
-      <div className="mb-6"><AccountTools onChanged={() => window.location.reload()} /></div>
+      <DailyLimitSettings inboxes={inboxes} onSaved={async () => { await load(); setLimitRevision(current => current + 1); }} />
+      <div className="mb-6"><AccountTools onChanged={() => window.location.reload()} overviewRevision={limitRevision} /></div>
       {inboxes.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center mb-4">

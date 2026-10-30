@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { api } from '../../api';
 import AccountOverview from './AccountOverview';
 
-export default function AccountTools({onChanged}) {
+export default function AccountTools({onChanged, overviewRevision=0}) {
   const [preset,setPreset]=useState('yandex'),[message,setMessage]=useState(''),[busy,setBusy]=useState(false),[show,setShow]=useState(false);
   const hosts=preset==='yandex'?['smtp.yandex.ru','imap.yandex.ru']:preset==='mailru'?['smtp.mail.ru','imap.mail.ru']:['',''];
   async function add(e){e.preventDefault();setBusy(true);setMessage('');const f=Object.fromEntries(new FormData(e.currentTarget));try{
@@ -12,7 +12,7 @@ export default function AccountTools({onChanged}) {
   async function upload(e){const file=e.target.files?.[0];e.target.value='';if(!file)return;setBusy(true);try{const r=await api.upload('/local/accounts/import',file);setMessage(`Сохранено: ${r.saved}; ошибок: ${r.invalid}. `+r.errors.map(x=>`Строка ${x.row}: ${x.error}`).join('; '));onChanged?.();}catch(err){setMessage(err.message);}finally{setBusy(false);}}
   function template(){const text='email,max_emails_per_day,smtp_host,smtp_port,smtp_username,smtp_password,imap_host,imap_port,imap_username,imap_password\nowner@example.ru,5,smtp.example.ru,465,owner@example.ru,APP_PASSWORD,imap.example.ru,993,owner@example.ru,APP_PASSWORD\n';const url=URL.createObjectURL(new Blob([text],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='quickly-accounts-template.csv';a.click();URL.revokeObjectURL(url);}
   async function trust(e){e.preventDefault();setBusy(true);try{const hostname=new FormData(e.currentTarget).get('hostname');await api.post('/local/trusted-mail-hosts',{hostname});setMessage('Точный почтовый сервер добавлен в список доверенных для VPN. Повторите проверку подключения.');}catch(err){setMessage(err.message);}finally{setBusy(false);}}
-  return <div className="space-y-4"><AccountOverview/>
+  return <div className="space-y-4"><AccountOverview refreshRevision={overviewRevision}/>
     <section className="rounded-xl border bg-white p-4 space-y-3"><div className="flex flex-wrap gap-3 items-center"><button className="rounded bg-blue-700 px-3 py-2 text-white" onClick={()=>setShow(!show)}>Add Yandex / Mail.ru / corporate mailbox</button><label className="cursor-pointer rounded border px-3 py-2">Import account CSV<input type="file" accept=".csv" className="hidden" disabled={busy} onChange={upload}/></label><button onClick={template} className="text-blue-700">Download account CSV template</button></div>
     <p className="text-sm text-gray-600">For Gmail and Outlook, click Add Inbox and select Google or Microsoft OAuth. Use an app password for Yandex and Mail.ru. Imported passwords are encrypted in the database; keep the original CSV in a safe place.</p>
     {show&&<form onSubmit={add} className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-4xl" key={preset}>
