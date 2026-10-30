@@ -457,7 +457,12 @@ export default function SystemHealth() {
   }, [checks, muted, toggleMute]);
 
   return (
-    <div className="mx-auto min-h-0 max-w-5xl flex-1 space-y-6 overflow-y-auto p-6">
+    <main
+      aria-label="Состояние системы"
+      tabIndex={0}
+      className="min-h-0 min-w-0 flex-1 overflow-y-auto"
+    >
+      <div className="mx-auto w-full min-w-0 max-w-5xl space-y-6 p-6">
       {/* Page title */}
       <div className="flex items-center justify-between">
         <div>
@@ -516,6 +521,7 @@ export default function SystemHealth() {
         Health data refreshes automatically every 5 minutes and when you click Refresh. 
         Muted checks are stored locally and do not affect other users.
       </p>
-    </div>
+      </div>
+    </main>
   );
 }
