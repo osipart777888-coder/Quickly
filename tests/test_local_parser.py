@@ -200,6 +200,17 @@ def test_country_scope_accepts_no_manual_cities_and_preserves_country():
         with pytest.raises(ValueError): bridge_module.validate_request(valid() | change)
 
 
+def test_city_catalog_search_finds_multiword_city_beyond_initial_suggestions(tmp_path):
+    root = tmp_path / 'parser'
+    (root / 'data').mkdir(parents=True)
+    cities = [{'code': f'city-{i}', 'name': f'Город {i}', 'country_code': 'ru'} for i in range(1201)]
+    cities.append({'code': 'nnovgorod', 'name': 'Нижний Новгород', 'country_code': 'ru'})
+    (root / 'data/yandex-cities.json').write_text(json.dumps(cities))
+    bridge = bridge_module.Bridge({'parser_root': str(root)}, tmp_path / 'runs')
+    assert len(bridge.catalog('yandex', '', 'cities')) == 1200
+    assert bridge.catalog('yandex', 'Нижний Новгород', 'cities') == [{'code': 'nnovgorod', 'name': 'Нижний Новгород'}]
+
+
 def test_foreign_snapshot_preserves_country_and_coverage(tmp_path):
     root = tmp_path / 'parser'
     root.mkdir()

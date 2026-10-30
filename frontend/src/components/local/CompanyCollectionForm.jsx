@@ -3,6 +3,7 @@ import { api } from '../../api';
 
 import { collectionSources } from './companyCollectionRequest';
 import { countryLabels, parseCountryCommand } from './countryCollection';
+import CityPicker from './CityPicker';
 
 const input = 'block w-full rounded-md border border-gray-300 bg-transparent p-2 text-sm';
 const button = 'rounded-md border border-gray-300 px-3 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed';
@@ -10,7 +11,6 @@ function Field({ title, children }) { return <label className="block text-sm fon
 
 export default function CompanyCollectionForm({ params, change, source, onSource, method, onMethod, options, onOptions, sources, file, onFile, busy, onSubmit, onAccess, onSettings }) {
   const [parser, setParser] = useState({ connected: false, runs: [], message: 'Проверка соединения…' });
-  const [cities, setCities] = useState([]);
   const [countries, setCountries] = useState([]), [countryError, setCountryError] = useState('');
   const [command, setCommand] = useState(''), [commandMessage, setCommandMessage] = useState('');
   const definition = collectionSources.find(item => item.key === source);
@@ -38,12 +38,6 @@ export default function CompanyCollectionForm({ params, change, source, onSource
       .catch(error => { if (!cancelled) setCountryError(error.message); });
     return () => { cancelled = true; };
   }, [browser, maps, definition.parser, parser.connected]);
-  useEffect(() => {
-    if (!browser || !maps || !parser.connected || wholeCountry) { setCities([]); return; }
-    let cancelled = false;
-    api.get('/collector/local-parser/catalog?source=' + definition.parser + '&country_code=' + (params.country_code || 'RU')).then(value => { if (!cancelled) setCities(value); }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [browser, maps, definition.parser, parser.connected, params.country_code, wholeCountry]);
 
   return <form onSubmit={onSubmit} className="rounded-xl border border-gray-200 bg-white p-5 space-y-5" aria-label="Новый сбор компаний">
     <fieldset className="space-y-2">
@@ -61,6 +55,7 @@ export default function CompanyCollectionForm({ params, change, source, onSource
         </select></div>
         <div className="text-sm font-medium"><label htmlFor="collection-scope">Где искать</label><select id="collection-scope" className={input} value={params.scope || 'cities'} onChange={event => { change('scope', event.target.value); setCommandMessage(''); if (event.target.value === 'country' && params.limit === 100) change('limit', 10000); }}><option value="cities">Выбранные города</option><option value="country">Вся страна</option></select></div>
       </div>
+      {!wholeCountry && <CityPicker key={source + (params.country_code || 'RU')} source={definition.parser} countryCode={params.country_code || 'RU'} catalogAvailable={parser.connected} allowManual={source !== 'twogis'} values={params.cities} onChange={values => change('cities', values)} disabled={busy} />}
       <div className="flex flex-wrap gap-2 items-end"><div className="flex-1 min-w-0 basis-64 text-sm"><label htmlFor="collection-command">Или задайте запрос одной строкой</label><input id="collection-command" className={input} value={command} placeholder="Собери почты строительных компаний по всему Узбекистану" onChange={event => setCommand(event.target.value)} /></div>
         <button type="button" className={button} disabled={!countries.length || !command.trim()} onClick={() => { try { const values = parseCountryCommand(command, countries); if (params.limit === 100) values.limit = 10000; Object.entries(values).forEach(([key, value]) => change(key, value)); setCommandMessage(`Выбрано: ${values.country}; тематика: ${values.query}. Проверьте параметры и нажмите «Начать поиск почт».`); } catch (error) { setCommandMessage(error.message); } }}>Заполнить параметры</button>
       </div>
@@ -73,7 +68,7 @@ export default function CompanyCollectionForm({ params, change, source, onSource
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
       <Field title="Название запуска"><input required className={input} value={params.name} onChange={event => change('name', event.target.value)}/></Field>
       <Field title="Сколько карточек проверить"><input required type="number" min="1" max="10000" className={input} value={params.limit} onChange={event => change('limit', Number(event.target.value))}/></Field>
-      {maps && !wholeCountry && <Field title="Города через точку с запятой"><input required={browser} className={input} list="collection-cities" value={params.cities.join('; ')} onChange={event => change('cities', event.target.value.split(';').map(value => value.trim()))}/><datalist id="collection-cities">{cities.map(city => <option key={city.code} value={city.name}/>)}</datalist></Field>}
+      {maps && !browser && <CityPicker key={source + '-api'} source={definition.parser} countryCode={params.country_code || 'RU'} catalogAvailable={false} allowManual values={params.cities} onChange={values => change('cities', values)} required={false} disabled={busy} />}
       {(maps || (!browser && definition.parser)) && <Field title="Тематика / поисковая фраза"><input className={input} required={!browser || source !== 'twogis' || !options.rubrics.trim()} placeholder="Например: юридические компании" value={params.query} onChange={event => change('query', event.target.value)}/></Field>}
     </div>
     {browser && !maps && <div className="space-y-3">
