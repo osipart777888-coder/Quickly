@@ -8,82 +8,91 @@ export default function CityPicker({ source, countryCode, catalogAvailable, allo
   const input = useRef(null);
   const [query, setQuery] = useState('');
   const [options, setOptions] = useState([]);
-  const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(-1);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const matches = options.filter(city => !values.some(value => key(value) === key(city.name)));
-  const suggestions = matches.slice(0, 100);
+  const [catalogError, setCatalogError] = useState('');
+  const [selectionError, setSelectionError] = useState('');
+  const [retry, setRetry] = useState(0);
+  const suggestions = options.slice(0, 100);
 
   useEffect(() => {
-    input.current?.setCustomValidity(required && !values.length ? 'Выберите город из списка или нажмите «Добавить город».' : '');
+    input.current?.setCustomValidity(required && !values.length ? 'Отметьте хотя бы один город галочкой в списке.' : '');
   }, [required, values.length]);
 
   useEffect(() => {
-    if (!catalogAvailable || !open) { setLoading(false); return; }
+    if (!catalogAvailable) { setLoading(false); setOptions([]); return; }
     let cancelled = false;
     setLoading(true);
+    setCatalogError('');
     const timer = setTimeout(() => {
       const params = new URLSearchParams({ source, country_code: countryCode, q: query.trim(), kind: 'cities' });
       api.get('/collector/local-parser/catalog?' + params)
-        .then(rows => { if (!cancelled) { setOptions(rows); setActive(-1); setError(''); } })
-        .catch(err => { if (!cancelled) { setOptions([]); setError(err.message); } })
+        .then(rows => { if (!cancelled) setOptions(rows); })
+        .catch(error => { if (!cancelled) { setOptions([]); setCatalogError(error.message); } })
         .finally(() => { if (!cancelled) setLoading(false); });
     }, 200);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [source, countryCode, catalogAvailable, query, open]);
+  }, [source, countryCode, catalogAvailable, query, retry]);
 
-  function add(city) {
-    let name = typeof city === 'string' ? city.trim().replace(/\s+/g, ' ') : city.name;
-    if (!name) return;
-    if (values.length >= 30) { setError('Можно выбрать до 30 городов. Для общего обхода используйте режим «Вся страна».'); return; }
-    if (!allowManual && typeof city === 'string') {
-      const found = options.find(option => key(option.name) === key(name) || key(option.code) === key(name));
-      if (!found) { setError('Выберите город из списка 2ГИС.'); setOpen(true); return; }
-      name = found.name;
+  function select(name, checked) {
+    const selected = values.some(value => key(value) === key(name));
+    if (checked && !selected) {
+      if (values.length >= 30) { setSelectionError('Можно выбрать до 30 городов. Для общего обхода используйте режим «Вся страна».'); return; }
+      onChange([...values, name]);
+    } else if (!checked && selected) {
+      onChange(values.filter(value => key(value) !== key(name)));
     }
-    if (!values.some(value => key(value) === key(name))) onChange([...values, name]);
-    setQuery(''); setActive(-1); setError(''); setOpen(false);
-    input.current?.focus();
+    setSelectionError('');
   }
 
-  return <div className="space-y-2 min-w-0" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
-    <label htmlFor={id} className="block text-sm font-medium">Город для поиска</label>
-    <div className="flex flex-wrap gap-2 items-start">
-      <div className="relative min-w-0 flex-1 basis-64">
-        <input ref={input} id={id} role="combobox" aria-autocomplete="list" aria-expanded={open} aria-controls={id + '-list'}
-          aria-activedescendant={open && active >= 0 && suggestions[active] ? id + '-option-' + active : undefined}
-          autoComplete="off" maxLength={200} required={required && !values.length} disabled={disabled} value={query}
-          className="block w-full rounded-md border border-gray-300 bg-transparent p-2 text-sm" placeholder="Выберите из списка или введите название…"
-          onFocus={() => setOpen(true)} onClick={() => setOpen(true)}
-          onChange={event => { setQuery(event.target.value); setOptions([]); setActive(-1); setError(''); setOpen(true); }}
-          onKeyDown={event => {
-            if (event.key === 'Escape') { setOpen(false); return; }
-            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-              event.preventDefault(); setOpen(true);
-              setActive(current => Math.max(0, Math.min(suggestions.length - 1, current + (event.key === 'ArrowDown' ? 1 : -1))));
-            }
-            if (event.key === 'Enter') { event.preventDefault(); add(active >= 0 && suggestions[active] ? suggestions[active] : query); }
-          }} />
-        {open && <div className="absolute top-full left-0 right-0 z-20 mt-1 rounded-md border bg-white shadow-lg">
-          <ul id={id + '-list'} role="listbox" aria-label="Подсказки городов" className="max-h-52 overflow-y-auto py-1 text-sm">
-            {!loading && suggestions.map((city, index) => <li key={city.code} id={id + '-option-' + index} role="option" aria-selected={index === active}
-              className={`cursor-pointer px-3 py-2 hover:bg-gray-100 ${index === active ? 'bg-gray-100' : ''}`}
-              onMouseDown={event => event.preventDefault()} onClick={() => add(city)}>{city.name}</li>)}
-          </ul>
-          {!loading && matches.length > suggestions.length && <p className="border-t p-2 text-xs text-gray-500">Показаны первые {suggestions.length} городов. Введите название для поиска по всему каталогу.</p>}
-          {loading && <p role="status" className="p-3 text-sm text-gray-500">Загрузка городов…</p>}
-          {!loading && !suggestions.length && <p className="p-3 text-sm text-gray-500">{allowManual ? 'Введите название и нажмите «Добавить город» или Enter.' : 'Город не найден. Уточните название или проверьте подключение к каталогу.'}</p>}
-        </div>}
-      </div>
-      <button type="button" disabled={disabled || !catalogAvailable} aria-expanded={open} aria-controls={id + '-list'}
-        onClick={() => { input.current?.focus(); setOpen(!open); }}
-        title={catalogAvailable ? 'Открыть список городов выбранной страны' : 'Список городов доступен после подключения локального парсера'}
-        className="gap-2 rounded-md border border-gray-300 px-3 py-2 text-sm disabled:opacity-50">Список городов <span aria-hidden="true">{open ? '▴' : '▾'}</span></button>
-      <button type="button" disabled={disabled || !query.trim() || (!allowManual && loading)} onClick={() => add(query)} className="rounded-md border border-gray-300 px-3 py-2 text-sm disabled:opacity-50">Добавить город</button>
+  function addQuery() {
+    const name = query.trim().replace(/\s+/g, ' ');
+    if (!name) return;
+    const found = options.find(city => key(city.name) === key(name) || key(city.code) === key(name));
+    if (!allowManual && (!found || loading)) { setSelectionError('Найдите город и отметьте его галочкой в списке 2ГИС.'); return; }
+    if (values.length >= 30 && !values.some(value => key(value) === key(found?.name || name))) {
+      setSelectionError('Можно выбрать до 30 городов. Для общего обхода используйте режим «Вся страна».'); return;
+    }
+    select(found?.name || name, true);
+    setQuery('');
+  }
+
+  return <div className="space-y-3 min-w-0">
+    <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+      <span className="font-medium">Отметьте города галочками</span>
+      <span role="status" aria-live="polite">Выбрано городов: {values.length} / 30</span>
     </div>
-    {values.length > 0 && <ul aria-label="Выбранные города" className="flex flex-wrap gap-2">{values.map((city, index) => <li key={city + index} className="flex items-center gap-2 rounded-md border bg-gray-50 px-2 py-1 text-sm"><span>{city}</span><button type="button" disabled={disabled} aria-label={'Убрать город ' + city} onClick={() => onChange(values.filter((_, i) => i !== index))} className="px-1">×</button></li>)}</ul>}
-    <p className="text-xs text-gray-500">{allowManual ? 'Нажмите «Список городов» и выберите город мышкой. Или введите название и нажмите «Добавить город». Можно выбрать несколько городов.' : 'Нажмите «Список городов» и выберите город из каталога 2ГИС. Для быстрого поиска введите название. Можно выбрать несколько городов.'}</p>
-    {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
+    {values.length > 0 && <ul aria-label="Выбранные города" className="flex flex-wrap gap-2">{values.map((city, index) => <li key={city + index} className="flex items-center gap-2 rounded-md border bg-gray-50 px-2 py-1 text-sm"><span>{city}</span><button type="button" disabled={disabled} aria-label={'Убрать город ' + city} onClick={() => select(city, false)} className="px-1">×</button></li>)}</ul>}
+    <div>
+      <label htmlFor={id} className="block text-sm font-medium mb-1">Найти город</label>
+      <div className="flex flex-wrap gap-2">
+        <input ref={input} id={id} type="text" autoComplete="off" maxLength={200} disabled={disabled} value={query}
+          aria-controls={catalogAvailable ? id + '-list' : undefined}
+          className="min-w-0 flex-1 basis-64 rounded-md border border-gray-300 bg-transparent p-2 text-sm" placeholder="Например: Екатеринбург или Нижний Новгород"
+          onChange={event => { setQuery(event.target.value); setOptions([]); setSelectionError(''); }}
+          onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addQuery(); } }} />
+        {query && <button type="button" disabled={disabled} onClick={() => { setQuery(''); setSelectionError(''); }} className="rounded-md border px-3 py-2 text-sm">Сбросить поиск города</button>}
+        {allowManual && <button type="button" disabled={disabled || !query.trim()} onClick={addQuery} className="rounded-md border px-3 py-2 text-sm disabled:opacity-50">Добавить введённый город</button>}
+      </div>
+    </div>
+    {catalogAvailable && <div className="rounded-md border bg-gray-50">
+      {loading && <p role="status" className="p-3 text-sm">Загрузка городов…</p>}
+      {!loading && !catalogError && <>
+        <ul id={id + '-list'} aria-label="Список городов" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1 p-2 max-h-56 overflow-y-auto">
+          {suggestions.map(city => {
+            const checked = values.some(value => key(value) === key(city.name));
+            return <li key={city.code} className="min-w-0"><label className={`flex items-center gap-2 cursor-pointer rounded-md border p-2 text-sm ${checked ? 'bg-teal-50 border-teal-500' : 'border-transparent hover:bg-gray-100'}`}>
+              <input type="checkbox" checked={checked} disabled={disabled} className="shrink-0" onChange={event => select(city.name, event.target.checked)} />
+              <span className="break-words min-w-0">{city.name}</span>
+            </label></li>;
+          })}
+        </ul>
+        {options.length > suggestions.length && <p className="border-t p-2 text-xs text-gray-500">Показаны первые {suggestions.length} городов. Поиск выше ищет по всему каталогу.</p>}
+        {!suggestions.length && <p className="p-3 text-sm">{allowManual ? 'В каталоге не найдено. Можно добавить введённое название вручную.' : 'Город не найден в каталоге 2ГИС этой страны. Уточните название или выберите Яндекс Карты.'}</p>}
+      </>}
+      {catalogError && <div role="alert" className="p-3 space-y-2 text-sm"><p>Не удалось загрузить города: {catalogError}</p><button type="button" disabled={disabled} className="rounded-md border px-3 py-2" onClick={() => setRetry(value => value + 1)}>Повторить загрузку городов</button></div>}
+    </div>}
+    {!catalogAvailable && <p role="status" className="text-sm text-gray-500">{allowManual ? 'Каталог пока недоступен. Можно ввести название и нажать «Добавить введённый город».' : 'Ожидание подключения локального парсера для загрузки городов 2ГИС.'}</p>}
+    <p className="text-xs text-gray-500">Города выбираются галочками в списке выше. Можно выбрать несколько, до 30 за запуск. Поиск по названию сохраняет уже выбранные города.</p>
+    {selectionError && <p role="alert" className="text-sm text-red-700">{selectionError}</p>}
   </div>;
 }
