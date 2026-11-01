@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import DOMPurify from 'dompurify';
 import EmailContent from '../components/EmailContent';
+import './Unibox.css';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { useNotify } from '../context/NotificationContext';
@@ -501,8 +502,8 @@ export default function Unibox() {
   const { count: unreadCount } = useUniboxNotifications();
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden p-8">
-      <div className="flex items-center justify-between shrink-0">
+    <div className="unibox-page flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-hidden p-4 lg:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-2 shrink-0">
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-semibold">Unibox</h1>
           {unreadCount > 0 && (
@@ -514,18 +515,20 @@ export default function Unibox() {
           <span className="text-sm text-gray-500">Email inbox and replies</span>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 flex-1 min-h-0">
-        <Card className="xl:col-span-1 flex flex-col min-h-0 overflow-hidden">
-          <div className="flex items-center justify-between border-b border-gray-200 pb-3 mb-3">
-            <h2 className="font-semibold">Conversations</h2>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500">{total} total</span>
+      <div className="unibox-columns grid grid-cols-1 xl:grid-cols-3 gap-4 flex-1 min-h-0 min-w-0">
+        <Card className="unibox-list xl:col-span-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
+          <div className="unibox-conversation-header border-b border-gray-200 pb-3 mb-3">
+            <div className="unibox-conversation-title">
+              <h2 className="font-semibold">Conversations</h2>
+              <span className="unibox-total text-xs text-gray-500"><span>{total}</span><span>total</span></span>
+            </div>
+            <div className="unibox-filters">
               {/* Leads-only filter toggle */}
               <button
                 type="button"
                 onClick={() => setLeadsOnly(v => !v)}
                 title={leadsOnly ? 'Showing lead conversations only — click to show all' : 'Show lead conversations only'}
-                className={`flex items-center gap-1 text-xs rounded-full px-2.5 py-1 border transition-colors ${
+                className={`unibox-leads-toggle flex items-center gap-1 text-xs rounded-full px-2.5 py-1 border transition-colors ${
                   leadsOnly
                     ? 'bg-teal-600 text-white border-teal-600 hover:bg-teal-700'
                     : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
@@ -535,9 +538,10 @@ export default function Unibox() {
               </button>
               {/* Lead status filter */}
               <select
+                aria-label="Status"
                 value={leadStatusFilter}
                 onChange={e => setLeadStatusFilter(e.target.value)}
-                className="text-xs border rounded-full px-2 py-1 bg-white text-gray-600 focus:outline-none focus:ring-1 focus:ring-teal-300"
+                className="unibox-status text-xs border rounded-full px-2 py-1 bg-white text-gray-600 focus:outline-none focus:ring-1 focus:ring-teal-300"
               >
                 {LEAD_STATUSES.map(s => (
                   <option key={s.value} value={s.value}>{s.label}</option>
@@ -557,7 +561,7 @@ export default function Unibox() {
           )}
           {listError && <p className="text-sm text-red-600">{listError}</p>}
           {!listLoading && !listError && conversations.length === 0 && (
-            <p className="text-sm text-gray-500">
+            <p className="unibox-empty-state text-sm text-gray-500">
               {leadsOnly
                 ? 'No lead conversations found. Replies from leads will appear here.'
                 : 'No synced conversations yet. Initial sync includes recent 7 days only.'}
@@ -607,14 +611,14 @@ export default function Unibox() {
             })}
             {/* show older button at bottom of scrollable list */}
             <div className="flex justify-center py-2">
-              <Button variant="outline" size="sm" onClick={triggerLoadOlder} disabled={loadingOlder}>
+              <Button className="unibox-older-button" variant="outline" size="sm" onClick={triggerLoadOlder} disabled={loadingOlder}>
                 {loadingOlder ? 'Loading older...' : 'Show older'}
               </Button>
             </div>
           </div>
         </Card>
 
-        <Card className="xl:col-span-2 flex flex-col min-h-0 overflow-hidden">
+        <Card className="unibox-reader xl:col-span-2 flex flex-col min-h-0 min-w-0 overflow-hidden">
           {!selectedThread && !threadLoading && (
             <div className="text-gray-500 text-sm flex-1">Select a conversation to view messages and reply.</div>
           )}
