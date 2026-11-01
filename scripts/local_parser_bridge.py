@@ -48,13 +48,15 @@ def validate_request(data):
     result['scope'] = data.get('scope', 'cities')
     result['country_code'] = str(data.get('country_code', 'RU')).upper()
     result['country'] = str(data.get('country', '')).strip()[:100]
-    if result['scope'] not in {'cities', 'country'} or not re.fullmatch('[A-Z]{2}', result['country_code']):
+    if result['scope'] not in {'cities', 'regions', 'country'} or not re.fullmatch('[A-Z]{2}', result['country_code']):
         raise ValueError('Выберите страну и область поиска')
-    for key, maximum in [('cities', 30), ('urls', 20), ('rubrics', 10)]:
+    for key, maximum in [('cities', 30), ('region_codes', 30), ('urls', 20), ('rubrics', 10)]:
         values = data.get(key, [])
         if not isinstance(values, list) or len(values) > maximum or any(not isinstance(v, str) or len(v) > 2048 for v in values):
             raise ValueError('Некорректный список: ' + key)
         result[key] = list(dict.fromkeys(v.strip() for v in values if v.strip()))
+    if any(not re.fullmatch(r'[A-Z]{2}\.[A-Za-z0-9-]{1,20}', value) or not value.startswith(result['country_code'] + '.') for value in result['region_codes']):
+        raise ValueError('Выберите области выбранной страны')
     for key, default, low, high in [('limit', 100, 1, 10000), ('timeout', 900, 30, 3600), ('delay', 1, .5, 60)]:
         try: value = float(data.get(key, default))
         except (ValueError, TypeError): raise ValueError('Некорректный параметр: ' + key)
@@ -64,6 +66,7 @@ def validate_request(data):
     result['crawl_websites'] = data.get('crawl_websites', True) is True
     if result['source'] in {'yandex', '2gis'}:
         if result['scope'] == 'cities' and not result['cities']: raise ValueError('Укажите хотя бы один город')
+        if result['scope'] == 'regions' and not result['region_codes']: raise ValueError('Выберите хотя бы одну область / регион')
         if not result['query'] and not (result['source'] == '2gis' and result['rubrics']):
             raise ValueError('Укажите поисковую фразу или рубрику 2ГИС')
     else:
@@ -191,7 +194,7 @@ class Bridge:
         from company_emails.catalog import load_cities
         from company_emails.sources import build_tasks
         plan, coverage = None, None
-        if request['source'] in {'yandex', '2gis'} and (request['scope'] == 'country' or request['country_code'] != 'RU'):
+        if request['source'] in {'yandex', '2gis'} and (request['scope'] in {'regions', 'country'} or request['country_code'] != 'RU'):
             from company_emails.world import resolve
             cities, coverage = resolve(self.root, request)
             plan = build_tasks(request['source'], cities, request['rubrics'], [request['query']] if request['query'] else [], request['limit'])
@@ -256,13 +259,18 @@ class Bridge:
         if source not in {'yandex', '2gis'}: raise ValueError('Каталог доступен для карт')
         code = country_code.upper()
         if not re.fullmatch('[A-Z]{2}', code): raise ValueError('Некорректный код страны')
+        if kind == 'regions':
+            import sys
+            if str(self.root) not in sys.path: sys.path.insert(0, str(self.root))
+            from company_emails.world import regions
+            return [r for r in regions(self.root, source, code) if query.casefold() in (r['name'] + ' ' + r['ascii']).casefold()]
         if kind == 'countries' or (kind == 'cities' and code != 'RU'):
             import sys
             if str(self.root) not in sys.path: sys.path.insert(0, str(self.root))
             from company_emails.world import countries, map_cities
             if kind == 'countries': return countries(self.root, source)
             return [{'code': c['code'], 'name': c['name']} for c in map_cities(self.root, source, code)
-                    if query.casefold() in (c['name'] + ' ' + c.get('ascii', '')).casefold()][:1200]
+                    if query.casefold() in (c['name'] + ' ' + c.get('ascii', '') + ' ' + c.get('aliases', '')).casefold()][:1200]
         path = self.root / ('data/yandex-cities.json' if source == 'yandex' else 'vendor/parser_2gis/data/cities.json')
         if kind == 'rubrics':
             rubrics = read_json(self.root / 'vendor/parser_2gis/data/rubrics.json', {})

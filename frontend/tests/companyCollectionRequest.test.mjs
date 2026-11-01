@@ -48,3 +48,16 @@ test('history opens the matching result group', () => {
   assert.equal(collectionRequest('rusprofile', 'api', params).path, '/collector/local-parser/runs');
   assert.throws(() => collectionRequest('unknown', 'browser', params), /Выберите/);
 });
+
+test('region scope sends stable region codes only to map browser collection', () => {
+  const fields = { ...params, scope: 'regions', country_code: 'RU', region_codes: ['RU.71', 'RU.13'], cities: [] };
+  for (const source of ['yandex', 'twogis']) {
+    const body = collectionRequest(source, 'browser', fields).body;
+    assert.equal(body.scope, 'regions');
+    assert.deepEqual(body.region_codes, fields.region_codes);
+    assert.deepEqual(body.cities, []);
+    assert.deepEqual(collectionRequest(source, 'browser', { ...fields, scope: 'country' }).body.region_codes, []);
+  }
+  assert.deepEqual(collectionRequest('rusprofile', 'browser', fields).body.region_codes, []);
+  assert.equal(collectionRequest('yandex', 'api', fields).body.region_codes, undefined);
+});

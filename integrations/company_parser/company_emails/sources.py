@@ -64,7 +64,7 @@ def build_tasks(source: str, cities: list[dict], rubric_ids: list[str], queries:
                     point = f'{city["longitude"]},{city["latitude"]}'
                     url += "&" + urlencode({"ll": point, "sll": point, "z": 12, "lang": "ru_RU"})
                 task = new_task(source, url, query, limit, city["name"], city["code"])
-                task.update(country=city.get('country', 'Россия'), country_code=city.get('country_code', 'ru'))
+                task.update(country=city.get('country', 'Россия'), country_code=city.get('country_code', 'ru'), region=city.get('region', ''))
                 tasks.append(task)
         return tasks
     config = load_config(source)

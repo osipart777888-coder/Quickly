@@ -26,7 +26,7 @@ def run(parser_root, directory):
                 tasks = json.loads((directory / 'plan.json').read_text())
             else:
                 cities = []
-                if source in {'yandex', '2gis'} and (request.get('scope') == 'country' or request.get('country_code', 'RU') != 'RU'):
+                if source in {'yandex', '2gis'} and (request.get('scope') in {'regions', 'country'} or request.get('country_code', 'RU') != 'RU'):
                     from company_emails.world import resolve
                     cities, coverage = resolve(parser_root, request)
                     atomic_json(directory / 'geography.json', coverage)
@@ -62,14 +62,14 @@ def run(parser_root, directory):
             for task in tasks:
                 count = store.summary()['companies']
                 if count >= request['limit']:
-                    result = {'status': 'limited', 'message': 'Достигнут общий лимит карточек за запуск. Непроверенные города остаются в плане; полный обход страны не завершён.'}
+                    result = {'status': 'limited', 'message': 'Достигнут общий лимит карточек за запуск. Непроверенные города остаются в плане; полный обход выбранной территории не завершён.'}
                     break
                 task = dict(task, limit=request['limit'] - count + store.task_count(task['id']))
                 ok = collect(store, [task], timeout=request['timeout'], visible=request['visible'],
                              delay=request['delay'], retry_failed=True)
                 if not ok:
                     states = store.summary()['tasks']
-                    if request.get('scope') == 'country' and not states.get('needs_auth') and not states.get('interrupted'):
+                    if request.get('scope') in {'regions', 'country'} and not states.get('needs_auth') and not states.get('interrupted'):
                         result = {'status': 'completed_with_errors', 'message': 'Часть городов недоступна; подробности сохранены в истории.'}
                         continue
                     result = {'status': 'needs_auth' if states.get('needs_auth') else 'paused' if states.get('interrupted') else 'error',

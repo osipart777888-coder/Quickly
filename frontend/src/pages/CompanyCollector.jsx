@@ -5,7 +5,7 @@ import LocalCompanyParser from '../components/local/LocalCompanyParser';
 import CompanyCollectionForm from '../components/local/CompanyCollectionForm';
 import { collectionSources, resultSource, collectionRequest } from '../components/local/companyCollectionRequest';
 
-const initial = { name: 'Сбор компаний', sources: ['website'], scope: 'cities', country_code: 'RU', country: 'Россия', regions: [], cities: [], okved: [], query: '', employees_min: null, employees_max: null, limit: 100, only_active: false, only_email: true, exclude_existing: true, crawl_websites: true, check_mx: false, websites: [], rights_confirmed: false, rights_basis: '' };
+const initial = { name: 'Сбор компаний', sources: ['website'], scope: 'regions', region_codes: [], country_code: 'RU', country: 'Россия', regions: [], cities: [], okved: [], query: '', employees_min: null, employees_max: null, limit: 100, only_active: false, only_email: true, exclude_existing: true, crawl_websites: true, check_mx: false, websites: [], rights_confirmed: false, rights_basis: '' };
 const states = { ready: 'Доступен', blocked: 'Требует настройки', not_connected: 'Не подключён', queued: 'В очереди', running: 'Выполняется', paused: 'На паузе', stopped: 'Остановлен', completed: 'Завершён', completed_with_errors: 'Завершён с ошибками' };
 const inputClass = 'block w-full rounded-md border border-gray-300 bg-transparent p-2 text-sm';
 const buttonClass = 'rounded-md border border-gray-300 px-3 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed';

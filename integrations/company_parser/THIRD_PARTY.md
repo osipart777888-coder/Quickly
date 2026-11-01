@@ -11,7 +11,10 @@
 
 Country names and populated places come from [GeoNames](https://www.geonames.org/export/),
 licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
-Quickly downloads `countryInfo.txt` and `cities500.zip` from the official dump server
+Quickly downloads `countryInfo.txt`, `cities500.zip`, and `admin1CodesASCII.txt` from the official dump server
 into a local SQLite cache. Source date and SHA-256 are recorded in its metadata.
 The populated-place catalogue includes places over 500 inhabitants and administrative
 seats; it does not certify complete coverage of companies or public email addresses.
+`data/region-names-ru.json` derives Russian region labels from GeoNames administrative
+codes and Russian alternative names, retrieved on 2026-11-01, under the same CC BY 4.0 license.
+See `data/README.md` for source links and transformations.

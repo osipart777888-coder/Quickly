@@ -1,5 +1,14 @@
 # География Яндекс Карт
 
+`region-names-ru.json` — 83 русских названия регионов, полученные 1 ноября 2026 года
+из [GeoNames admin1CodesASCII.txt](https://download.geonames.org/export/dump/admin1CodesASCII.txt)
+и русскоязычных альтернатив [RU.zip](https://download.geonames.org/export/dump/alternatenames/RU.zip).
+Ключи — коды admin1 GeoNames, не автомобильные коды регионов России.
+Исключены исторические варианты; для Сахалинской области и Ставропольского края
+выбраны полные административные названия, нормализован регистр слов «область», «край».
+Лицензия — CC BY 4.0. Для других стран остаются исходные имена admin1CodesASCII.
+Связь населённых пунктов с регионами берётся из admin1 в cities500.
+
 Источник: [GeoNames](https://www.geonames.org/), [cities15000.zip](https://download.geonames.org/export/dump/cities15000.zip), получен 27 октября 2026 года. HTTP Last-Modified: `Tue, 27 Oct 2026 02:50:58 GMT`. Лицензия [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); [официальное описание](https://download.geonames.org/export/dump/readme.txt).
 
 В `yandex-cities.json` — 986 записей с `country_code=ru`: населённые пункты из cities15000 (население более 15 000 или административные центры), кроме кварталов `PPLX`. Поля: русское имя, внутренний код, GeoNames ID, широта, долгота, исходная численность населения и административный код. Численность служит только для порядка обхода и не является актуальной демографической статистикой. Русские варианты имён выбраны из альтернативных названий источника; совместимые старые коды сохранены.

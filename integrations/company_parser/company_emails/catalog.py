@@ -40,6 +40,7 @@ def make_tasks(cities: list[dict], rubric_ids: list[str], queries: list[str], li
             tasks.append({"id": hashlib.sha256(key.encode()).hexdigest()[:20],
                           "source": "2gis",
                           "country": city.get('country', 'Россия'), "country_code": city.get('country_code', 'ru'),
+                          "region": city.get('region', ''),
                           "domain": city['domain'],
                           "city": city["name"], "city_code": city["code"],
                           "query": query, "rubric": rubric, "url": url, "limit": limit})

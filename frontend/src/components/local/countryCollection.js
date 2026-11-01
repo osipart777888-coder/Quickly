@@ -49,5 +49,5 @@ export function parseCountryCommand(command, countries) {
   const stop = new Set(['собери', 'соберите', 'собрать', 'найди', 'найдите', 'найти', 'мне', 'пожалуйста', 'все', 'всех', 'всю', 'всей', 'всему', 'всем', 'всего', 'весь', 'почты', 'почту', 'почта', 'email', 'emails', 'электронные', 'электронных', 'адреса', 'адресов', 'по', 'во', 'в', 'на', 'стране', 'страны', 'территории', 'целиком', 'полностью']);
   const query = (text.slice(0, match.start) + ' ' + text.slice(match.end)).split(/\s+/).filter(word => word && !stop.has(word)).join(' ');
   if (!query) throw new Error('Укажите тематику: например, строительные компании.');
-  return { country_code: match.country.code, country: match.country.label, query, scope: 'country', cities: [] };
+  return { country_code: match.country.code, country: match.country.label, query, scope: 'country', cities: [], region_codes: [] };
 }

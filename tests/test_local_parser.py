@@ -200,6 +200,13 @@ def test_country_scope_accepts_no_manual_cities_and_preserves_country():
         with pytest.raises(ValueError): bridge_module.validate_request(valid() | change)
 
 
+def test_region_request_requires_explicit_codes_of_selected_country():
+    request = valid() | dict(scope='regions', region_codes=['RU.71', 'RU.71'], cities=[])
+    assert bridge_module.validate_request(request)['region_codes'] == ['RU.71']
+    for codes in [[], ['UZ.01'], ['../RU.71'], ['RU.71'] * 31]:
+        with pytest.raises(ValueError): bridge_module.validate_request(request | dict(region_codes=codes))
+
+
 def test_city_catalog_search_finds_multiword_city_beyond_initial_suggestions(tmp_path):
     root = tmp_path / 'parser'
     (root / 'data').mkdir(parents=True)

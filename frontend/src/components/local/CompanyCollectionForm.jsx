@@ -4,6 +4,7 @@ import { api } from '../../api';
 import { collectionSources } from './companyCollectionRequest';
 import { countryLabels, parseCountryCommand } from './countryCollection';
 import CityPicker from './CityPicker';
+import RegionPicker from './RegionPicker';
 
 const input = 'block w-full rounded-md border border-gray-300 bg-transparent p-2 text-sm';
 const button = 'rounded-md border border-gray-300 px-3 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed';
@@ -17,6 +18,7 @@ export default function CompanyCollectionForm({ params, change, source, onSource
   const browser = Boolean(definition.parser && (method === 'browser' || source === 'rusprofile'));
   const maps = source === 'yandex' || source === 'twogis';
   const wholeCountry = maps && browser && params.scope === 'country';
+  const byRegions = maps && browser && params.scope === 'regions';
   const country = countries.find(value => value.code === (params.country_code || 'RU'));
   const upload = source === 'import' || source === 'fns';
   const active = parser.runs.some(run => run.status === 'running');
@@ -49,13 +51,14 @@ export default function CompanyCollectionForm({ params, change, source, onSource
     {apiBlocked && <div role="status" className="rounded border p-3 text-sm">{apiSource?.message || 'Настройте подключение к API.'} <button type="button" className="underline" onClick={onSettings}>Настройки источников</button></div>}
     {maps && browser && <section className="rounded-lg border p-4 space-y-3" aria-label="География поиска">
       <div className="grid md:grid-cols-2 gap-4">
-        <div className="text-sm font-medium"><label htmlFor="collection-country">Страна поиска</label><select id="collection-country" className={input} value={params.country_code || 'RU'} disabled={!countries.length} onChange={event => { const selected = countries.find(value => value.code === event.target.value); change('country_code', selected.code); change('country', selected.label); change('cities', []); setCommandMessage(''); }}>
+        <div className="text-sm font-medium"><label htmlFor="collection-country">Страна поиска</label><select id="collection-country" className={input} value={params.country_code || 'RU'} disabled={!countries.length} onChange={event => { const selected = countries.find(value => value.code === event.target.value); change('country_code', selected.code); change('country', selected.label); change('cities', []); change('region_codes', []); setCommandMessage(''); }}>
           {!countries.length && <option value={params.country_code || 'RU'}>{countryError ? 'Каталог стран недоступен' : 'Загрузка стран…'}</option>}
           {countries.map(value => <option key={value.code} value={value.code}>{value.label}</option>)}
         </select></div>
-        <div className="text-sm font-medium"><label htmlFor="collection-scope">Область поиска</label><select id="collection-scope" className={input} value={params.scope || 'cities'} onChange={event => { change('scope', event.target.value); setCommandMessage(''); if (event.target.value === 'country' && params.limit === 100) change('limit', 10000); }}><option value="cities">Выбрать города ниже</option><option value="country">Вся страна</option></select></div>
+        <div className="text-sm font-medium"><label htmlFor="collection-scope">Масштаб поиска</label><select id="collection-scope" className={input} value={params.scope || 'regions'} onChange={event => { change('scope', event.target.value); setCommandMessage(''); if (event.target.value !== 'cities' && params.limit === 100) change('limit', 10000); }}><option value="regions">По областям / регионам</option><option value="cities">По отдельным городам</option><option value="country">Вся страна</option></select></div>
       </div>
-      {!wholeCountry && <CityPicker key={source + (params.country_code || 'RU')} source={definition.parser} countryCode={params.country_code || 'RU'} catalogAvailable={parser.connected} allowManual={source !== 'twogis'} values={params.cities} onChange={values => change('cities', values)} disabled={busy} />}
+      {byRegions && <RegionPicker key={source + (params.country_code || 'RU')} source={definition.parser} countryCode={params.country_code || 'RU'} catalogAvailable={parser.connected} values={params.region_codes || []} onChange={values => change('region_codes', values)} disabled={busy} />}
+      {!wholeCountry && !byRegions && <CityPicker key={source + (params.country_code || 'RU')} source={definition.parser} countryCode={params.country_code || 'RU'} catalogAvailable={parser.connected} allowManual={source !== 'twogis'} values={params.cities} onChange={values => change('cities', values)} disabled={busy} />}
       <div className="flex flex-wrap gap-2 items-end"><div className="flex-1 min-w-0 basis-64 text-sm"><label htmlFor="collection-command">Или задайте запрос одной строкой</label><input id="collection-command" className={input} value={command} placeholder="Собери почты строительных компаний по всему Узбекистану" onChange={event => setCommand(event.target.value)} /></div>
         <button type="button" className={button} disabled={!countries.length || !command.trim()} onClick={() => { try { const values = parseCountryCommand(command, countries); if (params.limit === 100) values.limit = 10000; Object.entries(values).forEach(([key, value]) => change(key, value)); setCommandMessage(`Выбрано: ${values.country}; тематика: ${values.query}. Проверьте параметры и нажмите «Начать поиск почт».`); } catch (error) { setCommandMessage(error.message); } }}>Заполнить параметры</button>
       </div>
@@ -97,6 +100,6 @@ export default function CompanyCollectionForm({ params, change, source, onSource
     <p className="text-sm text-gray-500">В результаты попадают только компании с найденным email. Итоговое число может быть меньше количества проверенных карточек. Результаты каждого источника показываются отдельно.</p>
     <Field title="Основание права обработки и хранения"><input required maxLength="2000" className={input} value={params.rights_basis} onChange={event => change('rights_basis', event.target.value)} placeholder="Собственные данные / договор / разрешение владельца"/></Field>
     <label className="flex items-start gap-2 text-sm"><input required type="checkbox" checked={params.rights_confirmed} onChange={event => change('rights_confirmed', event.target.checked)}/>Подтверждаю права на хранение и обработку выбранных данных</label>
-    <button type="submit" disabled={busy || !params.rights_confirmed || apiBlocked || (wholeCountry && (!country || !country.source_cities)) || (browser && (!parser.connected || !parser.parser_available || active))} className={`${button} bg-blue-700 text-white`}>Начать поиск почт</button>
+    <button type="submit" disabled={busy || !params.rights_confirmed || apiBlocked || (byRegions && !(params.region_codes || []).length) || (wholeCountry && (!country || !country.source_cities)) || (browser && (!parser.connected || !parser.parser_available || active))} className={`${button} bg-blue-700 text-white`}>Начать поиск почт</button>
   </form>;
 }

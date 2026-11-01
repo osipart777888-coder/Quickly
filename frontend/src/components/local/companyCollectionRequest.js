@@ -24,6 +24,7 @@ export function collectionRequest(source, method, params, options = {}) {
       scope: ['yandex', 'twogis'].includes(source) ? params.scope || 'cities' : 'cities',
       country_code: ['yandex', 'twogis'].includes(source) ? params.country_code || 'RU' : 'RU',
       country: ['yandex', 'twogis'].includes(source) ? params.country || '' : 'Россия',
+      region_codes: ['yandex', 'twogis'].includes(source) && params.scope === 'regions' ? params.region_codes || [] : [],
       cities: (params.cities || []).map(value => value.trim()).filter(Boolean), limit: params.limit,
       rubrics: split(options.rubrics), urls: String(options.urls || '').split('\n').map(value => value.trim()).filter(Boolean),
       timeout: options.timeout ?? 900, delay: options.delay ?? 1, visible: Boolean(options.visible),
